@@ -1,6 +1,9 @@
 #include "raccoon/Transport.h"
+#include "raccoon/detail/RetainStore.h"
+#include "raccoon/Channels.h"
 #include <lcm/lcm-cpp.hpp>
 #include <lcm/lcm.h>
+#include <raccoon/retain_request_t.hpp>
 #include <iostream>
 #include <atomic>
 #include <vector>
@@ -26,6 +29,7 @@ namespace raccoon
         lcm::LCM lcm;
         std::atomic<bool> running{false};
         std::vector<std::unique_ptr<RawSubscription>> subscriptions;
+        detail::RetainStore retainStore;
 
         bool initialize(const std::string& provider)
         {
@@ -34,7 +38,10 @@ namespace raccoon
             else
                 lcm = lcm::LCM(provider);
 
-            return lcm.good();
+            if (!lcm.good()) return false;
+
+            retainStore.startListening(lcm.getUnderlyingLCM());
+            return true;
         }
     };
 
@@ -59,13 +66,20 @@ namespace raccoon
     {
         if (!impl_ || !impl_->lcm.good()) return false;
 
-        if (options.reliable || options.retained)
+        if (options.reliable)
         {
-            std::cerr << "raccoon::Transport: reliable/retained not yet implemented, "
+            std::cerr << "raccoon::Transport: reliable not yet implemented, "
                       << "falling back to plain publish on: " << channel << std::endl;
         }
 
-        return impl_->lcm.publish(channel, data, static_cast<unsigned int>(dataLen)) == 0;
+        bool ok = impl_->lcm.publish(channel, data, static_cast<unsigned int>(dataLen)) == 0;
+
+        if (ok && options.retained)
+        {
+            impl_->retainStore.cache(channel, data, dataLen);
+        }
+
+        return ok;
     }
 
     bool Transport::subscribeRaw(const std::string& channel, RawHandler handler,
@@ -73,9 +87,9 @@ namespace raccoon
     {
         if (!impl_ || !impl_->lcm.good()) return false;
 
-        if (options.reliable || options.requestRetained)
+        if (options.reliable)
         {
-            std::cerr << "raccoon::Transport: reliable/retained not yet implemented, "
+            std::cerr << "raccoon::Transport: reliable not yet implemented, "
                       << "falling back to plain subscribe on: " << channel << std::endl;
         }
 
@@ -86,6 +100,21 @@ namespace raccoon
 
         lcm_subscribe(impl_->lcm.getUnderlyingLCM(), channel.c_str(),
                       rawSubscribeCallback, subPtr);
+
+        if (options.requestRetained)
+        {
+            raccoon::retain_request_t req{};
+            req.timestamp = 0;
+            req.channel = channel;
+            req.subscriber_id = "";
+
+            int maxLen = req.getEncodedSize();
+            std::vector<uint8_t> buf(maxLen);
+            req.encode(buf.data(), 0, maxLen);
+
+            impl_->lcm.publish(Channels::Protocol::RETAIN_REQUEST,
+                               buf.data(), static_cast<unsigned int>(maxLen));
+        }
 
         return true;
     }

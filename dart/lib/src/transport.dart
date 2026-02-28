@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'lcm/lcm.dart';
 import 'lcm/lcm_buffer.dart';
+import 'retain.dart';
 
 /// Options for publishing messages
 class PublishOptions {
@@ -32,8 +33,11 @@ class SubscribeOptions {
 /// Main transport class wrapping LCM with optional reliable delivery
 class RaccoonTransport {
   final Lcm _lcm;
+  final RetainStore _retainStore = RetainStore();
 
-  RaccoonTransport._(this._lcm);
+  RaccoonTransport._(this._lcm) {
+    _retainStore.startListening(_lcm);
+  }
 
   /// Create a new transport instance
   static Future<RaccoonTransport> create([String? provider]) async {
@@ -43,12 +47,16 @@ class RaccoonTransport {
 
   /// Publish a raw message on a channel
   int publish(String channel, Uint8List data, {PublishOptions options = const PublishOptions()}) {
-    if (options.reliable || options.retained) {
+    if (options.reliable) {
       // ignore: avoid_print
-      print('raccoon_transport: reliable/retained not yet implemented, '
+      print('raccoon_transport: reliable not yet implemented, '
           'falling back to plain publish on: $channel');
     }
-    return _lcm.publish(channel, data);
+    final bytesSent = _lcm.publish(channel, data);
+    if (options.retained) {
+      _retainStore.cache(channel, data);
+    }
+    return bytesSent;
   }
 
   /// Publish a typed LCM message on a channel
@@ -64,12 +72,16 @@ class RaccoonTransport {
   /// Subscribe to raw messages on a channel
   LcmSubscription subscribe(String channel, LcmMessageHandler handler,
       {SubscribeOptions options = const SubscribeOptions()}) {
-    if (options.reliable || options.requestRetained) {
+    if (options.reliable) {
       // ignore: avoid_print
-      print('raccoon_transport: reliable/retained not yet implemented, '
+      print('raccoon_transport: reliable not yet implemented, '
           'falling back to plain subscribe on: $channel');
     }
-    return _lcm.subscribe(channel, handler);
+    final sub = _lcm.subscribe(channel, handler);
+    if (options.requestRetained) {
+      RetainStore.sendRequest(_lcm, channel);
+    }
+    return sub;
   }
 
   /// Unsubscribe from a channel
