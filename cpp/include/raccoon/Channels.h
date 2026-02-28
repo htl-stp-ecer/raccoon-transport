@@ -28,6 +28,9 @@ namespace raccoon::Channels
     // BEMF
     constexpr auto BEMF_NOMINAL_VOLTAGE_CMD = "libstp/bemf/nominal_voltage_cmd";
 
+    // Screen
+    constexpr auto SCREEN_RENDER = "libstp/screen_render";
+
     // System
     constexpr auto DATA_DUMP_REQUEST = "libstp/system/dump_request";
     constexpr auto ERROR_MESSAGES = "libstp/errors";
@@ -67,6 +70,11 @@ namespace raccoon::Channels
         return "libstp/bemf/" + std::to_string(port) + "/offset_cmd";
     }
 
+    inline std::string bemfResetCommand(const PortId port)
+    {
+        return "libstp/bemf/" + std::to_string(port) + "/reset_cmd";
+    }
+
     inline std::string analog(const PortId port)
     {
         return "libstp/analog/" + std::to_string(port) + "/value";
@@ -95,6 +103,11 @@ namespace raccoon::Channels
     inline std::string motorPositionCommand(const PortId port)
     {
         return "libstp/motor/" + std::to_string(port) + "/position_cmd";
+    }
+
+    inline std::string motorRelativeCommand(const PortId port)
+    {
+        return "libstp/motor/" + std::to_string(port) + "/relative_cmd";
     }
 
     inline std::string motorPidCommand(const PortId port)
