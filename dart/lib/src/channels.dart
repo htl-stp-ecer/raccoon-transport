@@ -26,6 +26,13 @@ class Channels {
   // BEMF
   static const bemfNominalVoltageCmd = 'libstp/bemf/nominal_voltage_cmd';
 
+  // Screen
+  static const screenRender = 'libstp/screen_render';
+  static const screenRenderAnswer = 'libstp/screen_render/answer';
+
+  // YOLO
+  static const yoloFrame = 'libstp/yolo/frame';
+
   // System
   static const dataDumpRequest = 'libstp/system/dump_request';
   static const errorMessages = 'libstp/errors';
@@ -39,12 +46,14 @@ class Channels {
   static String backEmf(int port) => 'libstp/bemf/$port/value';
   static String bemfScaleCommand(int port) => 'libstp/bemf/$port/scale_cmd';
   static String bemfOffsetCommand(int port) => 'libstp/bemf/$port/offset_cmd';
+  static String bemfResetCommand(int port) => 'libstp/bemf/$port/reset_cmd';
   static String analog(int port) => 'libstp/analog/$port/value';
   static String digital(int bit) => 'libstp/digital/$bit/value';
   static String motorPowerCommand(int port) => 'libstp/motor/$port/power_cmd';
   static String motorStopCommand(int port) => 'libstp/motor/$port/stop_cmd';
   static String motorVelocityCommand(int port) => 'libstp/motor/$port/velocity_cmd';
   static String motorPositionCommand(int port) => 'libstp/motor/$port/position_cmd';
+  static String motorRelativeCommand(int port) => 'libstp/motor/$port/relative_cmd';
   static String motorPidCommand(int port) => 'libstp/motor/$port/pid_cmd';
   static String motorPositionResetCommand(int port) => 'libstp/motor/$port/position_reset_cmd';
   static String motorPower(int port) => 'libstp/motor/$port/power';
