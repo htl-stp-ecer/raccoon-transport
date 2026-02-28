@@ -19,3 +19,16 @@ export 'src/lcm/generator/dart_generator.dart';
 // Transport
 export 'src/channels.dart';
 export 'src/transport.dart';
+
+// Generated message types
+export 'messages/types/orientation_matrix_t.g.dart';
+export 'messages/types/quaternion_t.g.dart';
+export 'messages/types/scalar_f_t.g.dart';
+export 'messages/types/scalar_i32_t.g.dart';
+export 'messages/types/scalar_i8_t.g.dart';
+export 'messages/types/screen_render_answer_t.g.dart';
+export 'messages/types/screen_render_t.g.dart';
+export 'messages/types/string_t.g.dart';
+export 'messages/types/vector3f_t.g.dart';
+export 'messages/types/yolo_box_t.g.dart';
+export 'messages/types/yolo_frame_t.g.dart';

@@ -29,6 +29,7 @@ dist/
 .packages
 pubspec.lock
 *.g.dart
+!dart/lib/messages/**/*.g.dart
 
 # OS
 .DS_Store

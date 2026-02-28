@@ -1,0 +1,7 @@
+package exlcm;
+
+struct scalar_i32_t
+{
+    int64_t timestamp;
+    int32_t value;
+}
