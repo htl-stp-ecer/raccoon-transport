@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "raccoon-transport"
+version = "0.1.0"
+description = "Shared LCM transport library with channel definitions and optional reliable delivery"
+requires-python = ">=3.8"
+dependencies = ["lcm"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["raccoon_transport*"]

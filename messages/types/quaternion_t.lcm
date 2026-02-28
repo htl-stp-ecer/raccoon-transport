@@ -1,0 +1,10 @@
+package exlcm;
+
+struct quaternion_t
+{
+    int64_t timestamp;
+    float w;
+    float x;
+    float y;
+    float z;
+}

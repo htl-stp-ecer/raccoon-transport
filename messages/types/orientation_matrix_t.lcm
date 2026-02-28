@@ -1,0 +1,7 @@
+package exlcm;
+
+struct orientation_matrix_t
+{
+    int64_t timestamp;
+    int8_t m[9];
+}

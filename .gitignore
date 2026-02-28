@@ -1,0 +1,35 @@
+# Build directories
+build/
+cmake-build-*/
+_build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# C/C++
+*.o
+*.a
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# Dart
+.dart_tool/
+.packages
+pubspec.lock
+*.g.dart
+
+# OS
+.DS_Store
+Thumbs.db
