@@ -6,7 +6,7 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 OUT_DIR="$ROOT_DIR/python/raccoon_transport/types"
 
 # Clean existing generated files
-rm -rf "$OUT_DIR/exlcm"
+rm -rf "$OUT_DIR/raccoon"
 
 # Generate from all .lcm files
 find "$ROOT_DIR/messages" -name "*.lcm" -exec lcm-gen -p --ppath "$OUT_DIR" {} \;

@@ -7,13 +7,13 @@ DO NOT MODIFY BY HAND!!!!
 from io import BytesIO
 import struct
 
-from . import yolo_box_t as _yolo_box_t_mod
+import raccoon
 
 class yolo_frame_t(object):
 
     __slots__ = ["timestamp", "frame_width", "frame_height", "frame_size", "frame_data", "num_boxes", "boxes"]
 
-    __typenames__ = ["int64_t", "int32_t", "int32_t", "int32_t", "byte", "int32_t", "exlcm.yolo_box_t"]
+    __typenames__ = ["int64_t", "int32_t", "int32_t", "int32_t", "byte", "int32_t", "raccoon.yolo_box_t"]
 
     __dimensions__ = [None, None, None, None, ["frame_size"], None, ["num_boxes"]]
 
@@ -49,7 +49,7 @@ class yolo_frame_t(object):
         self.boxes = []
         """
         number of detected boxes
-        LCM Type: exlcm.yolo_box_t[num_boxes]
+        LCM Type: raccoon.yolo_box_t[num_boxes]
         """
 
 
@@ -64,7 +64,7 @@ class yolo_frame_t(object):
         buf.write(bytearray(self.frame_data[:self.frame_size]))
         buf.write(struct.pack(">i", self.num_boxes))
         for i0 in range(self.num_boxes):
-            assert self.boxes[i0]._get_packed_fingerprint() == _yolo_box_t_mod.yolo_box_t._get_packed_fingerprint()
+            assert self.boxes[i0]._get_packed_fingerprint() == raccoon.yolo_box_t._get_packed_fingerprint()
             self.boxes[i0]._encode_one(buf)
 
     @staticmethod
@@ -85,14 +85,14 @@ class yolo_frame_t(object):
         self.num_boxes = struct.unpack(">i", buf.read(4))[0]
         self.boxes = []
         for i0 in range(self.num_boxes):
-            self.boxes.append(_yolo_box_t_mod.yolo_box_t._decode_one(buf))
+            self.boxes.append(raccoon.yolo_box_t._decode_one(buf))
         return self
 
     @staticmethod
     def _get_hash_recursive(parents):
         if yolo_frame_t in parents: return 0
         newparents = parents + [yolo_frame_t]
-        tmphash = (0xc38891426f6b4781+ _yolo_box_t_mod.yolo_box_t._get_hash_recursive(newparents)) & 0xffffffffffffffff
+        tmphash = (0xc38891426f6b4781+ raccoon.yolo_box_t._get_hash_recursive(newparents)) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _packed_fingerprint = None
