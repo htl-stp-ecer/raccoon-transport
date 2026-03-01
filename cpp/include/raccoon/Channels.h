@@ -20,14 +20,6 @@ namespace raccoon::Channels
     constexpr auto QUATERNION_ACCURACY = "libstp/imu/quaternion_accuracy";
     constexpr auto CPU_TEMPERATURE = "libstp/cpu/temp/value";
 
-    // IMU orientation matrix commands
-    constexpr auto IMU_GYRO_ORIENTATION_CMD = "libstp/imu/gyro_orientation_cmd";
-    constexpr auto IMU_COMPASS_ORIENTATION_CMD = "libstp/imu/compass_orientation_cmd";
-    constexpr auto AXIS_REMAP_CMD = "libstp/imu/axis_remap_cmd";
-
-    // BEMF
-    constexpr auto BEMF_NOMINAL_VOLTAGE_CMD = "libstp/bemf/nominal_voltage_cmd";
-
     // Screen
     constexpr auto SCREEN_RENDER = "libstp/screen_render";
 
