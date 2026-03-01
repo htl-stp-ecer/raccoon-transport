@@ -15,7 +15,7 @@ target_include_directories(raccoon_transport PUBLIC
 
 target_link_libraries(raccoon_transport PUBLIC
     raccoon-messages-cpp
-    ${LCM_NAMESPACE}lcm
+        ${LCM_NAMESPACE}lcm-static
 )
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")

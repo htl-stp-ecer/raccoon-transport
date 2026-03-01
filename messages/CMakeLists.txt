@@ -22,11 +22,11 @@ lcm_add_library(raccoon-messages-c C ${c_sources})
 target_include_directories(raccoon-messages-c PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
 )
-target_link_libraries(raccoon-messages-c PUBLIC ${LCM_NAMESPACE}lcm)
+target_link_libraries(raccoon-messages-c PUBLIC ${LCM_NAMESPACE}lcm-static)
 
 # C++ headers-only interface
 lcm_add_library(raccoon-messages-cpp CPP ${cpp_headers})
 target_include_directories(raccoon-messages-cpp INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
 )
-target_link_libraries(raccoon-messages-cpp INTERFACE ${LCM_NAMESPACE}lcm)
+target_link_libraries(raccoon-messages-cpp INTERFACE ${LCM_NAMESPACE}lcm-static)
