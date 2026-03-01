@@ -31,7 +31,9 @@ namespace raccoon
     class Transport::Impl
     {
     public:
-        lcm::LCM lcm;
+        // lcm::LCM has no move ctor/assignment; construct it correctly
+        // from the start to avoid use-after-free from copy assignment.
+        std::unique_ptr<lcm::LCM> lcm;
         std::atomic<bool> running{false};
         std::vector<std::unique_ptr<RawSubscription>> subscriptions;
         detail::RetainStore retainStore;
@@ -49,14 +51,11 @@ namespace raccoon
 
         bool initialize(const std::string& provider)
         {
-            if (provider.empty())
-                lcm = lcm::LCM();
-            else
-                lcm = lcm::LCM(provider);
+            lcm = std::make_unique<lcm::LCM>(provider);
 
-            if (!lcm.good()) return false;
+            if (!lcm->good()) return false;
 
-            retainStore.startListening(lcm.getUnderlyingLCM());
+            retainStore.startListening(lcm->getUnderlyingLCM());
             return true;
         }
 
@@ -111,7 +110,7 @@ namespace raccoon
     bool Transport::publishRaw(const std::string& channel, const void* data, int dataLen,
                                const PublishOptions& options)
     {
-        if (!impl_ || !impl_->lcm.good()) return false;
+        if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return false;
 
         if (options.deduplicate)
         {
@@ -133,7 +132,7 @@ namespace raccoon
                 << "falling back to plain publish on: " << channel << std::endl;
         }
 
-        bool ok = impl_->lcm.publish(channel, data, static_cast<unsigned int>(dataLen)) == 0;
+        bool ok = impl_->lcm->publish(channel, data, static_cast<unsigned int>(dataLen)) == 0;
 
         if (ok && options.retained)
         {
@@ -146,7 +145,7 @@ namespace raccoon
     bool Transport::subscribeRaw(const std::string& channel, RawHandler handler,
                                  const SubscribeOptions& options)
     {
-        if (!impl_ || !impl_->lcm.good()) return false;
+        if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return false;
 
         if (options.reliable)
         {
@@ -159,7 +158,7 @@ namespace raccoon
         auto* subPtr = sub.get();
         impl_->subscriptions.push_back(std::move(sub));
 
-        lcm_subscribe(impl_->lcm.getUnderlyingLCM(), channel.c_str(),
+        lcm_subscribe(impl_->lcm->getUnderlyingLCM(), channel.c_str(),
                       rawSubscribeCallback, subPtr);
 
         if (options.requestRetained)
@@ -173,8 +172,8 @@ namespace raccoon
             std::vector<uint8_t> buf(maxLen);
             req.encode(buf.data(), 0, maxLen);
 
-            impl_->lcm.publish(Channels::Protocol::RETAIN_REQUEST,
-                               buf.data(), static_cast<unsigned int>(maxLen));
+            impl_->lcm->publish(Channels::Protocol::RETAIN_REQUEST,
+                                buf.data(), static_cast<unsigned int>(maxLen));
         }
 
         return true;
@@ -193,17 +192,17 @@ namespace raccoon
 
     int Transport::spinOnce(int timeoutMs)
     {
-        if (!impl_ || !impl_->lcm.good()) return -1;
-        return impl_->lcm.handleTimeout(timeoutMs);
+        if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return -1;
+        return impl_->lcm->handleTimeout(timeoutMs);
     }
 
     void Transport::spin()
     {
-        if (!impl_ || !impl_->lcm.good()) return;
+        if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return;
         impl_->running = true;
         while (impl_->running)
         {
-            impl_->lcm.handleTimeout(100);
+            impl_->lcm->handleTimeout(100);
         }
     }
 
