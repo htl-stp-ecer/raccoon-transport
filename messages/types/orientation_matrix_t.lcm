@@ -1,4 +1,4 @@
-package exlcm;
+package raccoon;
 
 struct orientation_matrix_t
 {
