@@ -7,6 +7,11 @@
 #include <iostream>
 #include <atomic>
 #include <vector>
+#include <unordered_map>
+#include <mutex>
+#include <limits>
+#include <cstring>
+#include <algorithm>
 
 namespace raccoon
 {
@@ -31,6 +36,17 @@ namespace raccoon
         std::vector<std::unique_ptr<RawSubscription>> subscriptions;
         detail::RetainStore retainStore;
 
+        // Deduplication cache
+        std::unordered_map<std::string, std::vector<uint8_t>> deduplicationCache;
+
+        // Latency stats
+        std::mutex statsMutex;
+        int64_t latencyMinUs{std::numeric_limits<int64_t>::max()};
+        int64_t latencyMaxUs{0};
+        int64_t latencySumUs{0};
+        uint64_t latencyCount{0};
+        uint64_t publishesDeduplicated{0};
+
         bool initialize(const std::string& provider)
         {
             if (provider.empty())
@@ -42,6 +58,37 @@ namespace raccoon
 
             retainStore.startListening(lcm.getUnderlyingLCM());
             return true;
+        }
+
+        void recordLatency(int64_t us)
+        {
+            std::lock_guard<std::mutex> lock(statsMutex);
+            if (us < 0) return; // clock skew, ignore
+            latencyMinUs = std::min(latencyMinUs, us);
+            latencyMaxUs = std::max(latencyMaxUs, us);
+            latencySumUs += us;
+            ++latencyCount;
+        }
+
+        TransportStats getAndResetStats()
+        {
+            std::lock_guard<std::mutex> lock(statsMutex);
+            TransportStats stats{};
+            stats.publishesDeduplicated = publishesDeduplicated;
+            if (latencyCount > 0)
+            {
+                stats.latency.minUs = latencyMinUs;
+                stats.latency.maxUs = latencyMaxUs;
+                stats.latency.avgUs = static_cast<int64_t>(latencySumUs / latencyCount);
+                stats.latency.count = latencyCount;
+            }
+            // Reset
+            latencyMinUs = std::numeric_limits<int64_t>::max();
+            latencyMaxUs = 0;
+            latencySumUs = 0;
+            latencyCount = 0;
+            publishesDeduplicated = 0;
+            return stats;
         }
     };
 
@@ -66,10 +113,24 @@ namespace raccoon
     {
         if (!impl_ || !impl_->lcm.good()) return false;
 
+        if (options.deduplicate)
+        {
+            auto& cached = impl_->deduplicationCache[channel];
+            if (cached.size() == static_cast<size_t>(dataLen) &&
+                std::memcmp(cached.data(), data, dataLen) == 0)
+            {
+                std::lock_guard<std::mutex> lock(impl_->statsMutex);
+                ++impl_->publishesDeduplicated;
+                return true;
+            }
+            cached.assign(static_cast<const uint8_t*>(data),
+                          static_cast<const uint8_t*>(data) + dataLen);
+        }
+
         if (options.reliable)
         {
             std::cerr << "raccoon::Transport: reliable not yet implemented, "
-                      << "falling back to plain publish on: " << channel << std::endl;
+                << "falling back to plain publish on: " << channel << std::endl;
         }
 
         bool ok = impl_->lcm.publish(channel, data, static_cast<unsigned int>(dataLen)) == 0;
@@ -90,7 +151,7 @@ namespace raccoon
         if (options.reliable)
         {
             std::cerr << "raccoon::Transport: reliable not yet implemented, "
-                      << "falling back to plain subscribe on: " << channel << std::endl;
+                << "falling back to plain subscribe on: " << channel << std::endl;
         }
 
         auto sub = std::make_unique<RawSubscription>();
@@ -117,6 +178,17 @@ namespace raccoon
         }
 
         return true;
+    }
+
+    void Transport::recordLatency(int64_t us)
+    {
+        if (impl_) impl_->recordLatency(us);
+    }
+
+    TransportStats Transport::getAndResetStats()
+    {
+        if (!impl_) return {};
+        return impl_->getAndResetStats();
     }
 
     int Transport::spinOnce(int timeoutMs)

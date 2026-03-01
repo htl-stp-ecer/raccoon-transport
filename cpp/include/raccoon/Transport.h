@@ -2,6 +2,7 @@
 
 #include "raccoon/Concepts.h"
 #include "raccoon/Options.h"
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -10,6 +11,20 @@
 
 namespace raccoon
 {
+    struct TransportStats
+    {
+        struct Latency
+        {
+            int64_t minUs = 0;
+            int64_t maxUs = 0;
+            int64_t avgUs = 0;
+            uint64_t count = 0;
+        };
+
+        Latency latency{};
+        uint64_t publishesDeduplicated = 0;
+    };
+
     class Transport
     {
     public:
@@ -43,17 +58,23 @@ namespace raccoon
 
         template <LcmMessage T>
         bool subscribe(const std::string& channel,
-                       std::function<void(const T&)> handler,
+                       std::function<void(const T &)> handler,
                        const SubscribeOptions& options = {})
         {
-            return subscribeRaw(channel, [handler](const void* data, int dataLen) {
+            return subscribeRaw(channel, [this, handler](const void* data, int dataLen)
+            {
                 T msg;
                 if (msg.decode(data, 0, dataLen) >= 0)
                 {
+                    auto nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    recordLatency(nowUs - msg.timestamp);
                     handler(msg);
                 }
             }, options);
         }
+
+        TransportStats getAndResetStats();
 
         int spinOnce(int timeoutMs = 0);
         void spin();
@@ -62,5 +83,7 @@ namespace raccoon
     private:
         class Impl;
         std::unique_ptr<Impl> impl_;
+
+        void recordLatency(int64_t us);
     };
 }

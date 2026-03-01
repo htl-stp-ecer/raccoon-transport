@@ -9,6 +9,7 @@ namespace raccoon
     {
         bool reliable = false;
         bool retained = false;
+        bool deduplicate = false;
         std::chrono::milliseconds retryInterval{100};
         uint32_t maxRetries = 10;
     };
