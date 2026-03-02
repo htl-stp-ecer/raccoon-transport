@@ -29,7 +29,7 @@ Uint8List _encodeEnvelope({
 
   // Fingerprint: envelope_t hash = (0xe68bfc03c6cb3940 << 1) | (top bit)
   // = 0xcd17f8078d967281
-  buf.putInt64(0xcd17f8078d967281 & 0x7fffffffffffffff);  // as signed
+  buf.putInt64(0xcd17f8078d967281);
 
   buf.putInt64(timestamp);
 
