@@ -89,6 +89,7 @@ Future<void> main(List<String> args) async {
   int count = 1;
   int timeoutMs = 5000;
   bool requestRetained = false;
+  bool reliable = false;
 
   for (int i = 2; i < args.length; i++) {
     switch (args[i]) {
@@ -98,6 +99,8 @@ Future<void> main(List<String> args) async {
         timeoutMs = int.parse(args[++i]);
       case '--request-retained':
         requestRetained = true;
+      case '--reliable':
+        reliable = true;
     }
   }
 
@@ -116,7 +119,7 @@ Future<void> main(List<String> args) async {
     } catch (e) {
       stderr.writeln('Decode error: $e');
     }
-  }, options: SubscribeOptions(requestRetained: requestRetained));
+  }, options: SubscribeOptions(requestRetained: requestRetained, reliable: reliable));
 
   _printEvent({'event': 'subscribed'});
 
