@@ -57,6 +57,7 @@ Future<void> main(List<String> args) async {
   int count = 1;
   int intervalMs = 0;
   bool retained = false;
+  bool reliable = false;
 
   for (int i = 3; i < args.length; i++) {
     switch (args[i]) {
@@ -66,29 +67,27 @@ Future<void> main(List<String> args) async {
         intervalMs = int.parse(args[++i]);
       case '--retained':
         retained = true;
+      case '--reliable':
+        reliable = true;
     }
   }
 
   final transport = await RaccoonTransport.create();
 
   try {
+    final options = PublishOptions(retained: retained, reliable: reliable);
     for (int seq = 0; seq < count; seq++) {
       final msg = _createMessage(type, values);
-      if (retained) {
-        transport.publishMessage(channel, msg,
-            options: const PublishOptions(retained: true));
-      } else {
-        transport.publishMessage(channel, msg);
-      }
+      transport.publishMessage(channel, msg, options: options);
       _printEvent({'event': 'published', 'seq': seq});
       if (intervalMs > 0 && seq < count - 1) {
         await Future.delayed(Duration(milliseconds: intervalMs));
       }
     }
 
-    if (retained) {
+    if (retained || reliable) {
       _printEvent({'event': 'ready'});
-      // Stay alive serving retain requests until stdin closes
+      // Stay alive to serve retain requests / process reliable ACKs
       await stdin.drain();
     }
   } finally {

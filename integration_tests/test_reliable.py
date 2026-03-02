@@ -1,17 +1,18 @@
-"""Reliable (at-least-once) pub/sub integration tests — Python-to-Python."""
+"""Reliable (at-least-once) pub/sub integration tests."""
 
+import json
 import threading
 import time
 
 import pytest
 
 from raccoon_transport import Transport
-from raccoon_transport.types.raccoon import scalar_f_t
+from raccoon_transport.types.raccoon import scalar_f_t, scalar_i32_t
 from integration_tests.conftest import spin_transport
 
 
 # ---------------------------------------------------------------------------
-# Test: reliable publish -> reliable subscribe delivers message
+# Python-to-Python tests
 # ---------------------------------------------------------------------------
 
 def test_reliable_delivery():
@@ -59,10 +60,6 @@ def test_reliable_delivery():
         subscriber.close()
 
 
-# ---------------------------------------------------------------------------
-# Test: deduplication — retransmitted envelopes only delivered once
-# ---------------------------------------------------------------------------
-
 def test_reliable_dedup():
     publisher = Transport()
     subscriber = Transport()
@@ -104,10 +101,6 @@ def test_reliable_dedup():
         subscriber.close()
 
 
-# ---------------------------------------------------------------------------
-# Test: max retries exhausted — message is dropped after maxRetries
-# ---------------------------------------------------------------------------
-
 def test_reliable_max_retries_exhausted():
     publisher = Transport()
     # No subscriber — ACKs will never arrive
@@ -134,10 +127,6 @@ def test_reliable_max_retries_exhausted():
     finally:
         publisher.close()
 
-
-# ---------------------------------------------------------------------------
-# Test: multiple reliable messages on the same channel
-# ---------------------------------------------------------------------------
 
 def test_reliable_multiple_messages():
     publisher = Transport()
@@ -179,3 +168,72 @@ def test_reliable_multiple_messages():
         stop.set()
         publisher.close()
         subscriber.close()
+
+
+# ---------------------------------------------------------------------------
+# Cross-language: Dart publish -> C++ subscribe (reliable)
+# ---------------------------------------------------------------------------
+
+def test_dart_pub_cpp_sub_reliable(dart_helper, cpp_helper):
+    """Dart publishes reliably, C++ subscribes reliably — the exact path
+    used by the Flutter UI to send shutdown commands to stm32-data-reader."""
+    channel = "test/reliable/dart_cpp"
+
+    # Start C++ subscriber first (reliable)
+    sub = cpp_helper(
+        "interop_subscribe",
+        [channel, "scalar_i32_t", "--count", "1", "--timeout-ms", "5000",
+         "--reliable"],
+    )
+    sub.wait_for_event("subscribed")
+    time.sleep(0.1)
+
+    # Dart publishes reliably
+    pub = dart_helper(
+        "interop_publish.dart",
+        [channel, "scalar_i32_t",
+         json.dumps({"timestamp": 9000, "value": 42}),
+         "--reliable"],
+    )
+    pub.wait_for_event("published", timeout=5)
+
+    # Wait for C++ to receive
+    evt = sub.wait_for_event("received", timeout=5)
+    assert evt["data"]["timestamp"] == 9000
+    assert evt["data"]["value"] == 42
+
+    sub.wait_for_event("done", timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Cross-language: C++ publish -> Dart subscribe (reliable)
+# ---------------------------------------------------------------------------
+
+def test_cpp_pub_dart_sub_reliable(dart_helper, cpp_helper):
+    """C++ publishes reliably, Dart subscribes reliably."""
+    channel = "test/reliable/cpp_dart"
+
+    # Start Dart subscriber first (reliable)
+    sub = dart_helper(
+        "interop_subscribe.dart",
+        [channel, "scalar_i32_t", "--count", "1", "--timeout-ms", "5000",
+         "--reliable"],
+    )
+    sub.wait_for_event("subscribed")
+    time.sleep(0.1)
+
+    # C++ publishes reliably
+    pub = cpp_helper(
+        "interop_publish",
+        [channel, "scalar_i32_t",
+         json.dumps({"timestamp": 9001, "value": 77}),
+         "--reliable"],
+    )
+    pub.wait_for_event("published", timeout=5)
+
+    # Wait for Dart to receive
+    evt = sub.wait_for_event("received", timeout=5)
+    assert evt["data"]["timestamp"] == 9001
+    assert evt["data"]["value"] == 77
+
+    sub.wait_for_event("done", timeout=5)

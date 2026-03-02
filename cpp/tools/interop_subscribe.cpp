@@ -60,6 +60,7 @@ int main(int argc, char* argv[]) {
     int count = 1;
     int timeoutMs = 5000;
     bool requestRetained = false;
+    bool reliable = false;
 
     for (int i = 3; i < argc; i++) {
         std::string arg = argv[i];
@@ -69,6 +70,8 @@ int main(int argc, char* argv[]) {
             timeoutMs = std::stoi(argv[++i]);
         } else if (arg == "--request-retained") {
             requestRetained = true;
+        } else if (arg == "--reliable") {
+            reliable = true;
         }
     }
 
@@ -77,6 +80,7 @@ int main(int argc, char* argv[]) {
 
     raccoon::SubscribeOptions opts;
     opts.requestRetained = requestRetained;
+    opts.reliable = reliable;
 
     transport.subscribeRaw(channel, [&](const void* data, int dataLen) {
         try {

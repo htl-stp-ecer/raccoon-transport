@@ -42,6 +42,7 @@ int main(int argc, char* argv[]) {
     int count = 1;
     int intervalMs = 0;
     bool retained = false;
+    bool reliable = false;
 
     for (int i = 4; i < argc; i++) {
         std::string arg = argv[i];
@@ -51,12 +52,15 @@ int main(int argc, char* argv[]) {
             intervalMs = std::stoi(argv[++i]);
         } else if (arg == "--retained") {
             retained = true;
+        } else if (arg == "--reliable") {
+            reliable = true;
         }
     }
 
     auto transport = raccoon::Transport::create();
     raccoon::PublishOptions opts;
     opts.retained = retained;
+    opts.reliable = reliable;
 
     for (int seq = 0; seq < count; seq++) {
         auto encoded = createAndEncode(type, values);
@@ -69,9 +73,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (retained) {
+    if (retained || reliable) {
         printEvent("{\"event\":\"ready\"}");
-        // Spin transport in background to respond to retain requests
+        // Spin transport in background to process retain requests / reliable ACKs
         std::atomic<bool> running{true};
         std::thread spinner([&]() {
             while (running.load(std::memory_order_relaxed)) {
