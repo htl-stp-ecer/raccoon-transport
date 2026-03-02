@@ -29,7 +29,6 @@ class Channels:
     BEMF_NOMINAL_VOLTAGE_CMD = "libstp/bemf/nominal_voltage_cmd"
 
     # System
-    DATA_DUMP_REQUEST = "libstp/system/dump_request"
     ERROR_MESSAGES = "libstp/errors"
     SHUTDOWN_CMD = "libstp/system/shutdown_cmd"
     SHUTDOWN_STATUS = "libstp/system/shutdown_status"

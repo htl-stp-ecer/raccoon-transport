@@ -34,7 +34,6 @@ class Channels {
   static const yoloFrame = 'libstp/yolo/frame';
 
   // System
-  static const dataDumpRequest = 'libstp/system/dump_request';
   static const errorMessages = 'libstp/errors';
   static const shutdownCmd = 'libstp/system/shutdown_cmd';
   static const shutdownStatus = 'libstp/system/shutdown_status';
@@ -46,7 +45,6 @@ class Channels {
   static String backEmf(int port) => 'libstp/bemf/$port/value';
   static String bemfScaleCommand(int port) => 'libstp/bemf/$port/scale_cmd';
   static String bemfOffsetCommand(int port) => 'libstp/bemf/$port/offset_cmd';
-  static String bemfResetCommand(int port) => 'libstp/bemf/$port/reset_cmd';
   static String analog(int port) => 'libstp/analog/$port/value';
   static String digital(int bit) => 'libstp/digital/$bit/value';
   static String motorPowerCommand(int port) => 'libstp/motor/$port/power_cmd';
