@@ -34,10 +34,26 @@ pip install -e .
 ./scripts/generate-python-types.sh
 ```
 
+### Integration Tests:
+```bash
+# Prerequisites: build C++, Dart, and install Python package (see above)
+PYTHONPATH=. pytest integration_tests/ -v
+
+# Run a specific suite
+PYTHONPATH=. pytest integration_tests/test_cross_pubsub.py -v
+PYTHONPATH=. pytest integration_tests/test_message_compat.py -v
+PYTHONPATH=. pytest integration_tests/test_retain.py -v
+PYTHONPATH=. pytest integration_tests/test_stress.py -v
+
+# Filter by language
+PYTHONPATH=. pytest integration_tests/ -v -k "cpp"
+PYTHONPATH=. pytest integration_tests/ -v -k "dart"
+```
+
 ## Architecture
 
 ### Message Types
-- `messages/types/` — 11 existing `exlcm::` message types (preserved namespace)
+- `messages/types/` — 11 `raccoon::` message types
 - `messages/protocol/` — `raccoon::` protocol types for reliability/retain
 
 ### C++ Library (`cpp/`)
@@ -55,6 +71,17 @@ pip install -e .
 ### Python Package (`python/`)
 - `Transport` — Wraps `lcm.LCM`
 - Pre-generated Python types in `raccoon_transport/types/exlcm/`
+
+### C++ Interop Tools (`cpp/tools/`)
+- `interop_publish` / `interop_subscribe` — CLI tools with JSON event protocol
+- Used by integration tests to test C++ in cross-language scenarios
+- Built automatically with the C++ library
+
+### Integration Tests (`integration_tests/`)
+- 32 tests covering all 6 directional language pairs (Py/Dart/C++)
+- `helpers/dart_runner.py` — DartHelper subprocess manager
+- `helpers/cpp_runner.py` — CppHelper subprocess manager
+- Tests: cross-pubsub, message compat, retain protocol, stress/concurrency
 
 ### Channel Naming
 All channels follow pattern `libstp/<device>/<property>`.
