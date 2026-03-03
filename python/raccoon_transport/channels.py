@@ -2,7 +2,11 @@
 
 
 class Channels:
-    """All channel name constants and factory methods."""
+    """Stable application-level channel names used by libstp and Raccoon.
+
+    Constant attributes cover shared singleton channels. Static methods build
+    port-indexed channel names for motors, servos, and sensors.
+    """
 
     # Sensor data
     GYRO = "libstp/gyro/value"
@@ -105,11 +109,12 @@ class Channels:
 
 
 class ProtocolChannels:
-    """Internal protocol channels for reliability/retain."""
+    """Internal channels reserved for transport-layer coordination."""
 
     ACK = "__raccoon/ack"
     RETAIN_REQUEST = "__raccoon/retain_request"
 
     @staticmethod
     def reliable_channel(channel: str) -> str:
+        """Return the wrapped channel name used by the reliability layer."""
         return f"__raccoon/r/{channel}"

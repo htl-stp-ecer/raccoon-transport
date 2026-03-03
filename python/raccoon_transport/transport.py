@@ -13,6 +13,7 @@ class Transport:
     """Main transport class wrapping lcm.LCM with optional reliable delivery."""
 
     def __init__(self, provider: str = ""):
+        """Create a transport bound to the given LCM provider URL."""
         self._lcm = lcm.LCM(provider) if provider else lcm.LCM()
         self._subscriptions = []
         self._retain_cache: dict[str, bytes] = {}
@@ -22,10 +23,24 @@ class Transport:
 
     @classmethod
     def create(cls, provider: str = "") -> "Transport":
+        """Construct a transport instance.
+
+        This is a convenience alternate constructor for callers that prefer a
+        factory-style API.
+        """
         return cls(provider)
 
     def publish(self, channel: str, message, *, reliable: bool = False, retained: bool = False):
-        """Publish an LCM message on the given channel."""
+        """Publish an encoded LCM message on ``channel``.
+
+        Args:
+            channel: Destination channel name.
+            message: LCM message instance with an ``encode()`` method.
+            reliable: Reserved for future reliable-delivery support. Currently
+                logs a warning and falls back to normal publish.
+            retained: When ``True``, cache the encoded payload so it can be
+                replayed to future subscribers that request retained state.
+        """
         if reliable:
             logger.warning(
                 "reliable not yet implemented, "
@@ -38,7 +53,19 @@ class Transport:
             self._retain_cache[channel] = encoded
 
     def subscribe(self, channel: str, handler, *, reliable: bool = False, request_retained: bool = False):
-        """Subscribe to messages on the given channel."""
+        """Subscribe to messages on ``channel``.
+
+        Args:
+            channel: Channel to subscribe to.
+            handler: Callback passed directly to ``lcm.LCM.subscribe``.
+            reliable: Reserved for future reliable-delivery support. Currently
+                logs a warning and falls back to normal subscribe.
+            request_retained: When ``True``, publish a retain request after the
+                subscription is created so any cached state is replayed.
+
+        Returns:
+            The subscription handle returned by ``lcm.LCM.subscribe``.
+        """
         if reliable:
             logger.warning(
                 "reliable not yet implemented, "
@@ -70,7 +97,7 @@ class Transport:
             logger.debug("Failed to decode retain_request_t", exc_info=True)
 
     def _send_retain_request(self, channel: str):
-        """Send a retain_request_t for the given channel."""
+        """Send a retain request for ``channel`` on the internal protocol bus."""
         channel_bytes = channel.encode("utf-8")
         subscriber_bytes = b""
         # Layout: int64 fingerprint + int64 timestamp + string channel + string subscriber_id
@@ -84,7 +111,7 @@ class Transport:
         self._lcm.publish(ProtocolChannels.RETAIN_REQUEST, data)
 
     def spin_once(self, timeout_ms: int = 100) -> int:
-        """Handle a single pending message."""
+        """Handle at most one pending message and return the LCM status code."""
         return self._lcm.handle_timeout(timeout_ms)
 
     def spin(self):
@@ -93,7 +120,7 @@ class Transport:
             self._lcm.handle()
 
     def close(self):
-        """Unsubscribe all and clean up."""
+        """Unsubscribe all active handlers owned by this transport instance."""
         for sub in self._subscriptions:
             self._lcm.unsubscribe(sub)
         self._subscriptions.clear()
