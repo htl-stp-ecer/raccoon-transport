@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'lcm/lcm.dart';
 import 'lcm/lcm_buffer.dart';
 import 'retain.dart';
+import 'reliable.dart';
 
 /// Options for publishing messages
 class PublishOptions {
@@ -34,9 +35,15 @@ class SubscribeOptions {
 class RaccoonTransport {
   final Lcm _lcm;
   final RetainStore _retainStore = RetainStore();
+  late final ReliablePublisher _reliablePublisher;
+  late final ReliableSubscriber _reliableSubscriber;
 
   RaccoonTransport._(this._lcm) {
+    final instanceId = generateInstanceId();
+    _reliablePublisher = ReliablePublisher(_lcm, instanceId);
+    _reliableSubscriber = ReliableSubscriber(_lcm, instanceId);
     _retainStore.startListening(_lcm);
+    _reliablePublisher.startListening();
   }
 
   /// Create a new transport instance
@@ -48,9 +55,13 @@ class RaccoonTransport {
   /// Publish a raw message on a channel
   int publish(String channel, Uint8List data, {PublishOptions options = const PublishOptions()}) {
     if (options.reliable) {
-      // ignore: avoid_print
-      print('raccoon_transport: reliable not yet implemented, '
-          'falling back to plain publish on: $channel');
+      final bytesSent = _reliablePublisher.publish(channel, data,
+          retryInterval: options.retryInterval,
+          maxRetries: options.maxRetries);
+      if (options.retained) {
+        _retainStore.cache(channel, data);
+      }
+      return bytesSent;
     }
     final bytesSent = _lcm.publish(channel, data);
     if (options.retained) {
@@ -73,9 +84,13 @@ class RaccoonTransport {
   LcmSubscription subscribe(String channel, LcmMessageHandler handler,
       {SubscribeOptions options = const SubscribeOptions()}) {
     if (options.reliable) {
-      // ignore: avoid_print
-      print('raccoon_transport: reliable not yet implemented, '
-          'falling back to plain subscribe on: $channel');
+      _reliableSubscriber.subscribe(channel, handler);
+      if (options.requestRetained) {
+        RetainStore.sendRequest(_lcm, channel);
+      }
+      // Return a dummy subscription for the user-facing channel;
+      // the actual reliable subscription is managed internally
+      return _lcm.subscribe('__raccoon/noop/${channel.hashCode}', (_, __) {});
     }
     final sub = _lcm.subscribe(channel, handler);
     if (options.requestRetained) {
@@ -94,6 +109,8 @@ class RaccoonTransport {
 
   /// Close and release resources
   void dispose() {
+    _reliablePublisher.dispose();
+    _reliableSubscriber.dispose();
     _lcm.close();
   }
 }

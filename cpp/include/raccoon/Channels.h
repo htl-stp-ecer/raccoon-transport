@@ -24,7 +24,6 @@ namespace raccoon::Channels
     constexpr auto SCREEN_RENDER = "libstp/screen_render";
 
     // System
-    constexpr auto DATA_DUMP_REQUEST = "libstp/system/dump_request";
     constexpr auto ERROR_MESSAGES = "libstp/errors";
     constexpr auto SHUTDOWN_CMD = "libstp/system/shutdown_cmd";
     constexpr auto SHUTDOWN_STATUS = "libstp/system/shutdown_status";
@@ -60,11 +59,6 @@ namespace raccoon::Channels
     inline std::string bemfOffsetCommand(const PortId port)
     {
         return "libstp/bemf/" + std::to_string(port) + "/offset_cmd";
-    }
-
-    inline std::string bemfResetCommand(const PortId port)
-    {
-        return "libstp/bemf/" + std::to_string(port) + "/reset_cmd";
     }
 
     inline std::string analog(const PortId port)

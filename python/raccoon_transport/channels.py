@@ -1,12 +1,8 @@
-"""Channel name definitions for LCM communication."""
+"""Channel-name helpers shared by the Python transport implementation."""
 
 
 class Channels:
-    """Stable application-level channel names used by libstp and Raccoon.
-
-    Constant attributes cover shared singleton channels. Static methods build
-    port-indexed channel names for motors, servos, and sensors.
-    """
+    """Stable application-level channel names used by the Python transport."""
 
     # Sensor data
     GYRO = "libstp/gyro/value"
@@ -33,7 +29,6 @@ class Channels:
     BEMF_NOMINAL_VOLTAGE_CMD = "libstp/bemf/nominal_voltage_cmd"
 
     # System
-    DATA_DUMP_REQUEST = "libstp/system/dump_request"
     ERROR_MESSAGES = "libstp/errors"
     SHUTDOWN_CMD = "libstp/system/shutdown_cmd"
     SHUTDOWN_STATUS = "libstp/system/shutdown_status"
@@ -109,7 +104,7 @@ class Channels:
 
 
 class ProtocolChannels:
-    """Internal channels reserved for transport-layer coordination."""
+    """Internal protocol channels used for reliable and retained delivery."""
 
     ACK = "__raccoon/ack"
     RETAIN_REQUEST = "__raccoon/retain_request"

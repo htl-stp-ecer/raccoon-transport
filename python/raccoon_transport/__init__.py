@@ -2,13 +2,20 @@
 
 This package exposes:
 
-- ``Transport``: a small wrapper around ``lcm.LCM`` with retained-message
-  replay support.
+- ``Transport``: a wrapper around ``lcm.LCM`` with reliable and retained
+  delivery helpers.
 - ``Channels``: stable application-level channel names.
 - ``ProtocolChannels``: internal channels used by the transport protocol.
 """
 
-from .transport import Transport
-from .channels import Channels, ProtocolChannels
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
-__all__ = ["Transport", "Channels", "ProtocolChannels"]
+from .channels import Channels, ProtocolChannels
+from .transport import Transport
+
+try:
+    __version__ = _pkg_version("raccoon-transport")
+except PackageNotFoundError:
+    __version__ = "dev"
+
+__all__ = ["Transport", "Channels", "ProtocolChannels", "__version__"]

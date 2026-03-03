@@ -1,9 +1,10 @@
 #include "raccoon/Transport.h"
 #include "raccoon/detail/RetainStore.h"
+#include "raccoon/detail/ReliablePublisher.h"
+#include "raccoon/detail/ReliableSubscriber.h"
 #include "raccoon/Channels.h"
 #include <lcm/lcm-cpp.hpp>
 #include <lcm/lcm.h>
-#include <raccoon/retain_request_t.hpp>
 #include <iostream>
 #include <atomic>
 #include <vector>
@@ -12,6 +13,7 @@
 #include <limits>
 #include <cstring>
 #include <algorithm>
+#include <random>
 
 namespace raccoon
 {
@@ -28,15 +30,31 @@ namespace raccoon
         sub->handler(rbuf->data, static_cast<int>(rbuf->data_size));
     }
 
+    static std::string generateInstanceId()
+    {
+        std::random_device rd;
+        std::mt19937_64 gen(rd());
+        std::uniform_int_distribution<uint64_t> dist;
+        uint64_t val = dist(gen);
+        char buf[17];
+        std::snprintf(buf, sizeof(buf), "%016lx", static_cast<unsigned long>(val));
+        return std::string(buf, 16);
+    }
+
     class Transport::Impl
     {
     public:
-        // lcm::LCM has no move ctor/assignment; construct it correctly
-        // from the start to avoid use-after-free from copy assignment.
+        // lcm::LCM has no move ctor/assignment; use unique_ptr to avoid
+        // use-after-free from copy assignment.
         std::unique_ptr<lcm::LCM> lcm;
         std::atomic<bool> running{false};
         std::vector<std::unique_ptr<RawSubscription>> subscriptions;
         detail::RetainStore retainStore;
+
+        // Reliable delivery
+        std::string instanceId;
+        detail::ReliablePublisher reliablePublisher;
+        detail::ReliableSubscriber reliableSubscriber;
 
         // Deduplication cache
         std::unordered_map<std::string, std::vector<uint8_t>> deduplicationCache;
@@ -49,13 +67,20 @@ namespace raccoon
         uint64_t latencyCount{0};
         uint64_t publishesDeduplicated{0};
 
-        bool initialize(const std::string& provider)
+        explicit Impl(const std::string& provider = "")
+            : lcm(std::make_unique<lcm::LCM>(provider))
+            , instanceId(generateInstanceId())
+            , reliablePublisher(instanceId)
+            , reliableSubscriber(instanceId)
         {
-            lcm = std::make_unique<lcm::LCM>(provider);
+        }
 
-            if (!lcm->good()) return false;
+        bool initialize()
+        {
+            if (!lcm || !lcm->good()) return false;
 
             retainStore.startListening(lcm->getUnderlyingLCM());
+            reliablePublisher.startListening(lcm->getUnderlyingLCM());
             return true;
         }
 
@@ -99,8 +124,8 @@ namespace raccoon
     Transport Transport::create(const std::string& provider)
     {
         Transport t;
-        t.impl_ = std::make_unique<Impl>();
-        if (!t.impl_->initialize(provider))
+        t.impl_ = std::make_unique<Impl>(provider);
+        if (!t.impl_->initialize())
         {
             std::cerr << "raccoon::Transport: Failed to initialize LCM" << std::endl;
         }
@@ -128,8 +153,13 @@ namespace raccoon
 
         if (options.reliable)
         {
-            std::cerr << "raccoon::Transport: reliable not yet implemented, "
-                << "falling back to plain publish on: " << channel << std::endl;
+            bool ok = impl_->reliablePublisher.publish(
+                impl_->lcm->getUnderlyingLCM(), channel, data, dataLen, options);
+            if (ok && options.retained)
+            {
+                impl_->retainStore.cache(channel, data, dataLen);
+            }
+            return ok;
         }
 
         bool ok = impl_->lcm->publish(channel, data, static_cast<unsigned int>(dataLen)) == 0;
@@ -149,8 +179,29 @@ namespace raccoon
 
         if (options.reliable)
         {
-            std::cerr << "raccoon::Transport: reliable not yet implemented, "
-                << "falling back to plain subscribe on: " << channel << std::endl;
+            impl_->reliableSubscriber.subscribe(
+                impl_->lcm->getUnderlyingLCM(), channel, std::move(handler));
+
+            if (options.requestRetained)
+            {
+                // Manual encoding matching Python/Dart protocol:
+                // int64 fingerprint(0) + int64 timestamp(0) +
+                // int32 channel_len + channel_bytes + int32 subscriber_id_len(0)
+                auto chanLen = static_cast<int32_t>(channel.size());
+                int totalLen = 8 + 8 + 4 + chanLen + 4;
+                std::vector<uint8_t> buf(totalLen, 0);
+                int off = 16; // skip fingerprint(0) + timestamp(0)
+                buf[off++] = static_cast<uint8_t>((chanLen >> 24) & 0xFF);
+                buf[off++] = static_cast<uint8_t>((chanLen >> 16) & 0xFF);
+                buf[off++] = static_cast<uint8_t>((chanLen >>  8) & 0xFF);
+                buf[off++] = static_cast<uint8_t>((chanLen      ) & 0xFF);
+                std::memcpy(buf.data() + off, channel.data(), chanLen);
+
+                impl_->lcm->publish(Channels::Protocol::RETAIN_REQUEST,
+                                    buf.data(), static_cast<unsigned int>(totalLen));
+            }
+
+            return true;
         }
 
         auto sub = std::make_unique<RawSubscription>();
@@ -163,17 +214,21 @@ namespace raccoon
 
         if (options.requestRetained)
         {
-            raccoon::retain_request_t req{};
-            req.timestamp = 0;
-            req.channel = channel;
-            req.subscriber_id = "";
-
-            int maxLen = req.getEncodedSize();
-            std::vector<uint8_t> buf(maxLen);
-            req.encode(buf.data(), 0, maxLen);
+            // Manual encoding matching Python/Dart protocol:
+            // int64 fingerprint(0) + int64 timestamp(0) +
+            // int32 channel_len + channel_bytes + int32 subscriber_id_len(0)
+            auto chanLen = static_cast<int32_t>(channel.size());
+            int totalLen = 8 + 8 + 4 + chanLen + 4;
+            std::vector<uint8_t> buf(totalLen, 0);
+            int off = 16; // skip fingerprint(0) + timestamp(0)
+            buf[off++] = static_cast<uint8_t>((chanLen >> 24) & 0xFF);
+            buf[off++] = static_cast<uint8_t>((chanLen >> 16) & 0xFF);
+            buf[off++] = static_cast<uint8_t>((chanLen >>  8) & 0xFF);
+            buf[off++] = static_cast<uint8_t>((chanLen      ) & 0xFF);
+            std::memcpy(buf.data() + off, channel.data(), chanLen);
 
             impl_->lcm->publish(Channels::Protocol::RETAIN_REQUEST,
-                                buf.data(), static_cast<unsigned int>(maxLen));
+                                buf.data(), static_cast<unsigned int>(totalLen));
         }
 
         return true;
@@ -193,7 +248,9 @@ namespace raccoon
     int Transport::spinOnce(int timeoutMs)
     {
         if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return -1;
-        return impl_->lcm->handleTimeout(timeoutMs);
+        int result = impl_->lcm->handleTimeout(timeoutMs);
+        impl_->reliablePublisher.tick(impl_->lcm->getUnderlyingLCM());
+        return result;
     }
 
     void Transport::spin()
@@ -203,6 +260,7 @@ namespace raccoon
         while (impl_->running)
         {
             impl_->lcm->handleTimeout(100);
+            impl_->reliablePublisher.tick(impl_->lcm->getUnderlyingLCM());
         }
     }
 

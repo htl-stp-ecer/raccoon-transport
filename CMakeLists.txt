@@ -29,3 +29,6 @@ add_subdirectory(messages)
 
 # ---------- C++ Transport Library ----------
 add_subdirectory(cpp)
+
+# ---------- Interop Tools ----------
+add_subdirectory(cpp/tools)

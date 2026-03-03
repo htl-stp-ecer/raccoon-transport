@@ -11,6 +11,7 @@
 
 namespace raccoon
 {
+    /** Lightweight counters collected by the C++ transport implementation. */
     struct TransportStats
     {
         struct Latency
@@ -25,6 +26,13 @@ namespace raccoon
         uint64_t publishesDeduplicated = 0;
     };
 
+    /**
+     * Typed wrapper around LCM with optional reliable and retained delivery.
+     *
+     * The implementation is hidden behind a PIMPL. Public users interact
+     * through typed `publish<T>()` and `subscribe<T>()` helpers or their raw
+     * equivalents when a message type is not available at compile time.
+     */
     class Transport
     {
     public:
@@ -36,12 +44,15 @@ namespace raccoon
         Transport(Transport&&) noexcept;
         Transport& operator=(Transport&&) noexcept;
 
+        /** Construct and connect a transport instance, optionally using an explicit provider URL. */
         static Transport create(const std::string& provider = "");
 
+        /** Publish a raw payload on a channel using the requested delivery options. */
         bool publishRaw(const std::string& channel, const void* data, int dataLen,
                         const PublishOptions& options = {});
 
         using RawHandler = std::function<void(const void* data, int dataLen)>;
+        /** Subscribe to raw payload bytes on a channel. */
         bool subscribeRaw(const std::string& channel, RawHandler handler,
                           const SubscribeOptions& options = {});
 
@@ -74,10 +85,14 @@ namespace raccoon
             }, options);
         }
 
+        /** Return collected stats and clear the internal counters. */
         TransportStats getAndResetStats();
 
+        /** Handle one LCM iteration and advance reliability timers. */
         int spinOnce(int timeoutMs = 0);
+        /** Block and keep handling messages until `stop()` is called. */
         void spin();
+        /** Request termination of a running `spin()` loop. */
         void stop();
 
     private:
