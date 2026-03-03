@@ -5,6 +5,7 @@
 
 namespace raccoon
 {
+    /** Per-publish transport features such as reliability, retain, and deduplication. */
     struct PublishOptions
     {
         bool reliable = false;
@@ -14,6 +15,7 @@ namespace raccoon
         uint32_t maxRetries = 10;
     };
 
+    /** Per-subscription features such as reliable delivery and retained replay. */
     struct SubscribeOptions
     {
         bool reliable = false;

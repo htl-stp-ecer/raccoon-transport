@@ -1,4 +1,4 @@
-"""Transport class wrapping LCM with optional reliable delivery."""
+"""Python transport wrapper around LCM with reliable and retained delivery helpers."""
 
 import logging
 import os
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class Transport:
-    """Main transport class wrapping lcm.LCM with optional reliable delivery."""
+    """Main Python transport wrapper used by robotics applications and tests."""
 
     def __init__(self, provider: str = ""):
         self._lcm = lcm.LCM(provider) if provider else lcm.LCM()
@@ -36,11 +36,12 @@ class Transport:
 
     @classmethod
     def create(cls, provider: str = "") -> "Transport":
+        """Construct a transport, optionally using an explicit LCM provider URL."""
         return cls(provider)
 
     def publish(self, channel: str, message, *, reliable: bool = False, retained: bool = False,
                 retry_interval_ms: int = 100, max_retries: int = 10):
-        """Publish an LCM message on the given channel."""
+        """Publish an encoded LCM message with optional reliable and retained delivery."""
         encoded = message.encode()
         if reliable:
             self._reliable_publish(channel, encoded, retry_interval_ms, max_retries)
@@ -109,7 +110,7 @@ class Transport:
         self._pending = remaining
 
     def subscribe(self, channel: str, handler, *, reliable: bool = False, request_retained: bool = False):
-        """Subscribe to messages on the given channel."""
+        """Subscribe to a channel, optionally enabling reliable mode or retained replay."""
         if reliable:
             return self._reliable_subscribe(channel, handler, request_retained)
 

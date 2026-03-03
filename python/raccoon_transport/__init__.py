@@ -1,3 +1,5 @@
+"""Public Python entrypoints for the raccoon transport layer."""
+
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
 
 from .transport import Transport
