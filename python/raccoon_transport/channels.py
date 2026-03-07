@@ -1,8 +1,8 @@
-"""Channel name definitions for LCM communication."""
+"""Channel-name helpers shared by the Python transport implementation."""
 
 
 class Channels:
-    """All channel name constants and factory methods."""
+    """Stable application-level channel names used by the Python transport."""
 
     # Sensor data
     GYRO = "libstp/gyro/value"
@@ -104,11 +104,12 @@ class Channels:
 
 
 class ProtocolChannels:
-    """Internal protocol channels for reliability/retain."""
+    """Internal protocol channels used for reliable and retained delivery."""
 
     ACK = "__raccoon/ack"
     RETAIN_REQUEST = "__raccoon/retain_request"
 
     @staticmethod
     def reliable_channel(channel: str) -> str:
+        """Return the wrapped channel name used by the reliability layer."""
         return f"__raccoon/r/{channel}"
