@@ -1,11 +1,21 @@
-"""Public Python entrypoints for the raccoon transport layer."""
+"""Public Python API for the shared Raccoon LCM transport package.
 
-from importlib.metadata import version as _pkg_version, PackageNotFoundError
+This package exposes:
 
-from .transport import Transport
+- ``Transport``: a wrapper around ``lcm.LCM`` with reliable and retained
+  delivery helpers.
+- ``Channels``: stable application-level channel names.
+- ``ProtocolChannels``: internal channels used by the transport protocol.
+"""
+
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
 from .channels import Channels, ProtocolChannels
+from .transport import Transport
 
 try:
     __version__ = _pkg_version("raccoon-transport")
 except PackageNotFoundError:
     __version__ = "dev"
+
+__all__ = ["Transport", "Channels", "ProtocolChannels", "__version__"]

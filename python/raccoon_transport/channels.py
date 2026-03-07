@@ -2,7 +2,7 @@
 
 
 class Channels:
-    """All public channel constants and factory methods known to the Python layer."""
+    """Stable application-level channel names used by the Python transport."""
 
     # Sensor data
     GYRO = "libstp/gyro/value"
@@ -115,4 +115,5 @@ class ProtocolChannels:
 
     @staticmethod
     def reliable_channel(channel: str) -> str:
+        """Return the wrapped channel name used by the reliability layer."""
         return f"__raccoon/r/{channel}"
