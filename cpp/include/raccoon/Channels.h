@@ -76,6 +76,11 @@ namespace raccoon::Channels
         return "libstp/motor/" + std::to_string(port) + "/power_cmd";
     }
 
+    inline std::string motorModeCommand(const PortId port)
+    {
+        return "libstp/motor/" + std::to_string(port) + "/mode_cmd";
+    }
+
     inline std::string motorStopCommand(const PortId port)
     {
         return "libstp/motor/" + std::to_string(port) + "/stop_cmd";
