@@ -18,14 +18,6 @@ class Channels {
   static const quaternionAccuracy = 'libstp/imu/quaternion_accuracy';
   static const cpuTemperature = 'libstp/cpu/temp/value';
 
-  // IMU orientation commands
-  static const imuGyroOrientationCmd = 'libstp/imu/gyro_orientation_cmd';
-  static const imuCompassOrientationCmd = 'libstp/imu/compass_orientation_cmd';
-  static const axisRemapCmd = 'libstp/imu/axis_remap_cmd';
-
-  // BEMF
-  static const bemfNominalVoltageCmd = 'libstp/bemf/nominal_voltage_cmd';
-
   // Screen
   static const screenRender = 'libstp/screen_render';
   static const screenRenderAnswer = 'libstp/screen_render/answer';
