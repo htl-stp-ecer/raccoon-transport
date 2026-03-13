@@ -17,6 +17,7 @@ namespace raccoon::Channels
     constexpr auto GYRO_ACCURACY = "libstp/gyro/accuracy";
     constexpr auto ACCEL_ACCURACY = "libstp/accel/accuracy";
     constexpr auto COMPASS_ACCURACY = "libstp/mag/accuracy";
+    constexpr auto QUATERNION_ACCURACY = "libstp/imu/quaternion_accuracy";
     constexpr auto CPU_TEMPERATURE = "libstp/cpu/temp/value";
 
     // Screen
