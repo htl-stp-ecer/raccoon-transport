@@ -48,6 +48,7 @@ class Channels {
   static String analog(int port) => 'libstp/analog/$port/value';
   static String digital(int bit) => 'libstp/digital/$bit/value';
   static String motorPowerCommand(int port) => 'libstp/motor/$port/power_cmd';
+  static String motorModeCommand(int port) => 'libstp/motor/$port/mode_cmd';
   static String motorStopCommand(int port) => 'libstp/motor/$port/stop_cmd';
   static String motorVelocityCommand(int port) => 'libstp/motor/$port/velocity_cmd';
   static String motorPositionCommand(int port) => 'libstp/motor/$port/position_cmd';

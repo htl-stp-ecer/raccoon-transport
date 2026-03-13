@@ -71,6 +71,10 @@ class Channels:
         return f"libstp/motor/{port}/power_cmd"
 
     @staticmethod
+    def motor_mode_command(port: int) -> str:
+        return f"libstp/motor/{port}/mode_cmd"
+
+    @staticmethod
     def motor_stop_command(port: int) -> str:
         return f"libstp/motor/{port}/stop_cmd"
 
