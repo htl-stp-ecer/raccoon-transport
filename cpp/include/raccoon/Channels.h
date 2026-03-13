@@ -55,16 +55,6 @@ namespace raccoon::Channels
         return "libstp/bemf/" + std::to_string(port) + "/value";
     }
 
-    inline std::string bemfScaleCommand(const PortId port)
-    {
-        return "libstp/bemf/" + std::to_string(port) + "/scale_cmd";
-    }
-
-    inline std::string bemfOffsetCommand(const PortId port)
-    {
-        return "libstp/bemf/" + std::to_string(port) + "/offset_cmd";
-    }
-
     inline std::string analog(const PortId port)
     {
         return "libstp/analog/" + std::to_string(port) + "/value";
