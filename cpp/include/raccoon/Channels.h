@@ -10,14 +10,13 @@ namespace raccoon::Channels
     constexpr auto LINEAR_ACCELERATION = "libstp/linear_accel/value";
     constexpr auto ACCEL_VELOCITY = "libstp/accel_velocity/value";
     constexpr auto MAGNETOMETER = "libstp/mag/value";
-    constexpr auto ORIENTATION = "libstp/imu/quaternion";
+    constexpr auto DMP_ORIENTATION = "libstp/imu/dmp_quaternion";
     constexpr auto HEADING = "libstp/imu/heading";
     constexpr auto TEMPERATURE = "libstp/imu/temp/value";
     constexpr auto BATTERY_VOLTAGE = "libstp/battery/voltage";
     constexpr auto GYRO_ACCURACY = "libstp/gyro/accuracy";
     constexpr auto ACCEL_ACCURACY = "libstp/accel/accuracy";
     constexpr auto COMPASS_ACCURACY = "libstp/mag/accuracy";
-    constexpr auto QUATERNION_ACCURACY = "libstp/imu/quaternion_accuracy";
     constexpr auto CPU_TEMPERATURE = "libstp/cpu/temp/value";
 
     // Screen
