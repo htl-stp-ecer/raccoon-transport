@@ -20,13 +20,12 @@ class Channels:
     QUATERNION_ACCURACY = "libstp/imu/quaternion_accuracy"
     CPU_TEMPERATURE = "libstp/cpu/temp/value"
 
-    # IMU orientation commands
-    IMU_GYRO_ORIENTATION_CMD = "libstp/imu/gyro_orientation_cmd"
-    IMU_COMPASS_ORIENTATION_CMD = "libstp/imu/compass_orientation_cmd"
-    AXIS_REMAP_CMD = "libstp/imu/axis_remap_cmd"
+    # Screen
+    SCREEN_RENDER = "libstp/screen_render"
+    SCREEN_RENDER_ANSWER = "libstp/screen_render/answer"
 
-    # BEMF
-    BEMF_NOMINAL_VOLTAGE_CMD = "libstp/bemf/nominal_voltage_cmd"
+    # Vision
+    YOLO_FRAME = "libstp/yolo/frame"
 
     # System
     ERROR_MESSAGES = "libstp/errors"
@@ -85,6 +84,10 @@ class Channels:
     @staticmethod
     def motor_position_command(port: int) -> str:
         return f"libstp/motor/{port}/position_cmd"
+
+    @staticmethod
+    def motor_relative_command(port: int) -> str:
+        return f"libstp/motor/{port}/relative_cmd"
 
     @staticmethod
     def motor_pid_command(port: int) -> str:

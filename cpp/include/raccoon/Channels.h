@@ -10,7 +10,7 @@ namespace raccoon::Channels
     constexpr auto LINEAR_ACCELERATION = "libstp/linear_accel/value";
     constexpr auto ACCEL_VELOCITY = "libstp/accel_velocity/value";
     constexpr auto MAGNETOMETER = "libstp/mag/value";
-    constexpr auto ORIENTATION = "libstp/imu/quaternion";
+    constexpr auto DMP_ORIENTATION = "libstp/imu/quaternion";
     constexpr auto HEADING = "libstp/imu/heading";
     constexpr auto TEMPERATURE = "libstp/imu/temp/value";
     constexpr auto BATTERY_VOLTAGE = "libstp/battery/voltage";
@@ -34,6 +34,10 @@ namespace raccoon::Channels
 
     // Screen
     constexpr auto SCREEN_RENDER = "libstp/screen_render";
+    constexpr auto SCREEN_RENDER_ANSWER = "libstp/screen_render/answer";
+
+    // Vision
+    constexpr auto YOLO_FRAME = "libstp/yolo/frame";
 
     // System
     constexpr auto ERROR_MESSAGES = "libstp/errors";
@@ -61,16 +65,6 @@ namespace raccoon::Channels
     inline std::string backEmf(const PortId port)
     {
         return "libstp/bemf/" + std::to_string(port) + "/value";
-    }
-
-    inline std::string bemfScaleCommand(const PortId port)
-    {
-        return "libstp/bemf/" + std::to_string(port) + "/scale_cmd";
-    }
-
-    inline std::string bemfOffsetCommand(const PortId port)
-    {
-        return "libstp/bemf/" + std::to_string(port) + "/offset_cmd";
     }
 
     inline std::string analog(const PortId port)

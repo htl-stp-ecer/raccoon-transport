@@ -18,14 +18,6 @@ class Channels {
   static const quaternionAccuracy = 'libstp/imu/quaternion_accuracy';
   static const cpuTemperature = 'libstp/cpu/temp/value';
 
-  // IMU orientation commands
-  static const imuGyroOrientationCmd = 'libstp/imu/gyro_orientation_cmd';
-  static const imuCompassOrientationCmd = 'libstp/imu/compass_orientation_cmd';
-  static const axisRemapCmd = 'libstp/imu/axis_remap_cmd';
-
-  // BEMF
-  static const bemfNominalVoltageCmd = 'libstp/bemf/nominal_voltage_cmd';
-
   // Screen
   static const screenRender = 'libstp/screen_render';
   static const screenRenderAnswer = 'libstp/screen_render/answer';
@@ -43,8 +35,6 @@ class Channels {
   static String servoPosition(int port) => 'libstp/servo/$port/position';
   static String servoPositionCommand(int port) => 'libstp/servo/$port/position_cmd';
   static String backEmf(int port) => 'libstp/bemf/$port/value';
-  static String bemfScaleCommand(int port) => 'libstp/bemf/$port/scale_cmd';
-  static String bemfOffsetCommand(int port) => 'libstp/bemf/$port/offset_cmd';
   static String analog(int port) => 'libstp/analog/$port/value';
   static String digital(int bit) => 'libstp/digital/$bit/value';
   static String motorPowerCommand(int port) => 'libstp/motor/$port/power_cmd';
