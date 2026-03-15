@@ -20,6 +20,18 @@ namespace raccoon::Channels
     constexpr auto QUATERNION_ACCURACY = "libstp/imu/quaternion_accuracy";
     constexpr auto CPU_TEMPERATURE = "libstp/cpu/temp/value";
 
+    // Odometry (computed on STM32)
+    constexpr auto ODOM_POS_X = "libstp/odometry/pos_x";
+    constexpr auto ODOM_POS_Y = "libstp/odometry/pos_y";
+    constexpr auto ODOM_HEADING = "libstp/odometry/heading";
+    constexpr auto ODOM_VX = "libstp/odometry/vx";
+    constexpr auto ODOM_VY = "libstp/odometry/vy";
+    constexpr auto ODOM_WZ = "libstp/odometry/wz";
+
+    // Odometry commands (from library to Pi reader)
+    constexpr auto KINEMATICS_CONFIG_CMD = "libstp/kinematics/config_cmd";
+    constexpr auto ODOM_RESET_CMD = "libstp/odometry/reset_cmd";
+
     // Screen
     constexpr auto SCREEN_RENDER = "libstp/screen_render";
     constexpr auto SCREEN_RENDER_ANSWER = "libstp/screen_render/answer";
