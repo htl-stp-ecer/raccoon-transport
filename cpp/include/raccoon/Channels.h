@@ -39,6 +39,9 @@ namespace raccoon::Channels
     // Vision
     constexpr auto YOLO_FRAME = "libstp/yolo/frame";
 
+    // Camera
+    constexpr auto CAM_DETECTIONS = "libstp/cam/detections";
+
     // System
     constexpr auto ERROR_MESSAGES = "libstp/errors";
     constexpr auto SHUTDOWN_CMD = "libstp/system/shutdown_cmd";
