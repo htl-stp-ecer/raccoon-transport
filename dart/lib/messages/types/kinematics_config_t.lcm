@@ -1,0 +1,15 @@
+package raccoon;
+
+struct kinematics_config_t
+{
+    int64_t timestamp;
+    // Inverse kinematics matrix (3 rows x 4 columns), row-major.
+    // Pre-baked with wheel radius and geometry constants.
+    float inv_matrix[12];
+    // Per-motor encoder calibration: radians per BEMF tick.
+    float ticks_to_rad[4];
+    // Forward kinematics matrix (4 rows x 3 columns), row-major.
+    // Maps body velocity [vx, vy, wz] to expected wheel speeds (rad/s).
+    // Used for per-wheel slip detection.
+    float fwd_matrix[12];
+}

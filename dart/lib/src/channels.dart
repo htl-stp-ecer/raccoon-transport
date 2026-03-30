@@ -38,8 +38,6 @@ class Channels {
   static String servoPosition(int port) => 'libstp/servo/$port/position';
   static String servoPositionCommand(int port) => 'libstp/servo/$port/position_cmd';
   static String backEmf(int port) => 'libstp/bemf/$port/value';
-  static String bemfScaleCommand(int port) => 'libstp/bemf/$port/scale_cmd';
-  static String bemfOffsetCommand(int port) => 'libstp/bemf/$port/offset_cmd';
   static String analog(int port) => 'libstp/analog/$port/value';
   static String digital(int bit) => 'libstp/digital/$bit/value';
   static String motorPowerCommand(int port) => 'libstp/motor/$port/power_cmd';
