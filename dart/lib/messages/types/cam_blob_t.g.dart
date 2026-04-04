@@ -6,24 +6,26 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:raccoon_transport/raccoon_transport.dart';
 
-class YoloBoxT implements LcmMessage {
-  static const int LCM_FINGERPRINT = 0x1e787544bf9ac9f0;
+class CamBlobT implements LcmMessage {
+  static const int LCM_FINGERPRINT = 0xccbdb8fa6cd129bf;
 
   int timestamp;
+  String label;
   double x;
   double y;
   double width;
   double height;
-  String label;
+  int area;
   double confidence;
 
-  YoloBoxT({
+  CamBlobT({
     required this.timestamp,
+    required this.label,
     required this.x,
     required this.y,
     required this.width,
     required this.height,
-    required this.label,
+    required this.area,
     required this.confidence,
   });
 
@@ -39,20 +41,21 @@ class YoloBoxT implements LcmMessage {
   @override
   void encodeBody(LcmBuffer buf) {
     buf.putInt64(timestamp);
-    buf.putFloat32(x);
-    buf.putFloat32(y);
-    buf.putFloat32(width);
-    buf.putFloat32(height);
     {
       final bytes = utf8.encode(label);
       buf.putUint32(bytes.length + 1);
       buf.putUint8List(bytes);
       buf.putUint8(0);
     }
+    buf.putFloat32(x);
+    buf.putFloat32(y);
+    buf.putFloat32(width);
+    buf.putFloat32(height);
+    buf.putInt32(area);
     buf.putFloat32(confidence);
   }
 
-  static YoloBoxT decode(LcmBuffer buf) {
+  static CamBlobT decode(LcmBuffer buf) {
     final fingerprint = buf.getInt64();
     if (fingerprint != LCM_FINGERPRINT) {
       throw Exception('Invalid fingerprint: expected 0x${BigInt.from(LCM_FINGERPRINT).toUnsigned(64).toRadixString(16).padLeft(16, '0')}, received 0x${BigInt.from(fingerprint).toUnsigned(64).toRadixString(16).padLeft(16, '0')}');
@@ -60,27 +63,29 @@ class YoloBoxT implements LcmMessage {
     return decodeBody(buf);
   }
 
-  static YoloBoxT decodeBody(LcmBuffer buf) {
+  static CamBlobT decodeBody(LcmBuffer buf) {
     final timestamp = buf.getInt64();
-    final x = buf.getFloat32();
-    final y = buf.getFloat32();
-    final width = buf.getFloat32();
-    final height = buf.getFloat32();
     final label = () {
       final len = buf.getUint32();
       final bytes = buf.getUint8List(len - 1);
       buf.getUint8(); // null terminator
       return utf8.decode(bytes);
     }();
+    final x = buf.getFloat32();
+    final y = buf.getFloat32();
+    final width = buf.getFloat32();
+    final height = buf.getFloat32();
+    final area = buf.getInt32();
     final confidence = buf.getFloat32();
 
-    return YoloBoxT(
+    return CamBlobT(
       timestamp: timestamp,
+      label: label,
       x: x,
       y: y,
       width: width,
       height: height,
-      label: label,
+      area: area,
       confidence: confidence,
     );
   }

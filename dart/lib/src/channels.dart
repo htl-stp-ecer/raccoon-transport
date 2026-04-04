@@ -22,8 +22,11 @@ class Channels {
   static const screenRender = 'libstp/screen_render';
   static const screenRenderAnswer = 'libstp/screen_render/answer';
 
-  // YOLO
-  static const yoloFrame = 'libstp/yolo/frame';
+  // Camera
+  static const camDetections = 'libstp/cam/detections';
+  static const camFrame = 'libstp/cam/frame';
+  static const camStreamCtl = 'libstp/cam/stream_ctl';
+  static const camConfig = 'libstp/cam/config';
 
   // System
   static const errorMessages = 'libstp/errors';
