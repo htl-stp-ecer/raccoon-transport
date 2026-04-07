@@ -174,3 +174,8 @@ When you add or change a message, check all of these:
 ### Avoiding Common Drift
 
 The highest-risk documentation mismatch in this repo has been assuming all languages share the exact same generated source pipeline. They do not. C++ is driven by `messages/`, but Dart keeps its own local `.lcm` copies. Any contributor README or automation change should make that split explicit.
+
+## License
+
+Copyright (C) 2026 Tobias Madlberger  
+Licensed under the GNU General Public License v3.0 — see [COPYING](COPYING) for details.
