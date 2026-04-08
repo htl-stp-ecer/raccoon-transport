@@ -9,13 +9,16 @@ on:
 jobs:
   build-and-test:
     runs-on: self-hosted
+    defaults:
+      run:
+        shell: arch -arm64 bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@v4
 
       # ── C++ ──────────────────────────────────────────────
       - name: Build C++ library and interop tools
         run: |
-          mkdir -p build && cd build
+          rm -rf build && mkdir build && cd build
           cmake ..
           cmake --build . -j$(nproc)
 
