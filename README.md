@@ -1,3 +1,5 @@
+[![CI](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml)
+
 # raccoon-transport
 
 `raccoon-transport` is the message and transport layer shared across the robotics stack. It combines four concerns in one repo:
