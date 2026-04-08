@@ -1,6 +1,24 @@
-[![CI](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml)
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/htl-stp-ecer/.github/main/profile/raccoon-logo.svg" alt="raccoon-transport" width="100"/>
 
 # raccoon-transport
+
+**The shared message and transport layer for RaccoonOS — LCM messaging across C++, Python, and Dart.**
+
+[![CI](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/htl-stp-ecer/raccoon-transport)](https://github.com/htl-stp-ecer/raccoon-transport/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/raccoon-transport?logo=pypi&logoColor=white)](https://pypi.org/project/raccoon-transport/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
+![C++20](https://img.shields.io/badge/C%2B%2B20-00599C?logo=cplusplus&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=ffdd54)
+![Dart](https://img.shields.io/badge/Dart-02569B?logo=dart&logoColor=white)
+
+> 📖 **Full documentation at [raccoon-docs.pages.dev](https://raccoon-docs.pages.dev/)**
+
+</div>
+
+---
 
 `raccoon-transport` is the message and transport layer shared across the robotics stack. It combines four concerns in one repo:
 
@@ -11,6 +29,8 @@
 
 This package is best treated as a small monorepo rather than a single library.
 
+---
+
 ## Repository Layout
 
 ```text
@@ -20,164 +40,161 @@ raccoon-transport/
 ├── python/              # Python package and pre-generated message classes
 ├── dart/                # Dart transport package, parser, generator, generated messages
 ├── integration_tests/   # Cross-language compatibility and stress tests
-└── scripts/             # Helper scripts, including Python type generation
+└── shared/              # Shared channel definitions
 ```
+
+---
+
+## Installation
+
+### Python
+
+```bash
+pip install raccoon-transport
+```
+
+### C++ (via CMake FetchContent)
+
+```cmake
+FetchContent_Declare(raccoon_transport GIT_REPOSITORY https://github.com/htl-stp-ecer/raccoon-transport.git GIT_TAG main)
+FetchContent_MakeAvailable(raccoon_transport)
+target_link_libraries(my_target PRIVATE raccoon::transport)
+```
+
+### Dart (pubspec.yaml)
+
+```yaml
+dependencies:
+  raccoon_transport:
+    path: ../raccoon-transport/dart
+```
+
+---
+
+## Quick Start (Python)
+
+```python
+from raccoon_transport import Transport, Channels
+from raccoon_transport.types.raccoon import scalar_i32_t
+
+t = Transport()
+
+# Subscribe to sensor data
+def on_motor_position(channel, data):
+    msg = scalar_i32_t.decode(data)
+    print(f"Motor position: {msg.value}")
+
+t.subscribe(Channels.motor_position(0), on_motor_position)
+
+# Publish a command
+cmd = scalar_i32_t()
+cmd.value = 50
+t.publish(Channels.motor_power_command(0), cmd.encode())
+```
+
+---
+
+## Building from Source
+
+### C++
+
+```bash
+mkdir -p build && cd build
+cmake ..
+cmake --build . -j$(nproc)
+```
+
+### Dart
+
+```bash
+cd dart
+dart pub get
+dart run build_runner build --delete-conflicting-outputs
+```
+
+### Python (editable install)
+
+```bash
+pip install -e python/
+```
+
+### Regenerate Python LCM types
+
+```bash
+./scripts/generate-python-types.sh
+```
+
+---
+
+## Integration Tests
+
+32 tests covering all 6 directional language pairs (Python, Dart, C++):
+
+```bash
+PYTHONPATH=. pytest integration_tests/ -v
+
+# Filter by suite
+PYTHONPATH=. pytest integration_tests/test_cross_pubsub.py -v
+PYTHONPATH=. pytest integration_tests/test_retain.py -v
+PYTHONPATH=. pytest integration_tests/test_stress.py -v
+```
+
+---
 
 ## Architecture
 
-### Message Schema Layer
+### Transport Layer
 
-The source-of-truth message files used by the C++ build live under:
+- **Plain publish/subscribe** — direct LCM call, zero overhead
+- **Reliable delivery** — at-least-once with acknowledgement protocol via `__raccoon/` control channels
+- **Retain** — latest-value-on-subscribe, so new subscribers immediately get the most recent message
 
-- `messages/types/`
-- `messages/protocol/`
+### Channel Naming
 
-Protocol messages:
+All channels follow the pattern `libstp/<device>/<property>`. Protocol channels use the `__raccoon/` prefix.
 
-- `envelope_t`
-- `ack_t`
-- `retain_request_t`
+### Message Types
 
-Those protocol types implement reliable delivery and retain replay across languages.
+Defined in `messages/types/*.lcm` under the `raccoon` package:
 
-### C++ Layer
+| Type | Description |
+|:-----|:------------|
+| `vector3f_t` | 3D float vector (gyro, accel, mag) |
+| `quaternion_t` | Orientation quaternion |
+| `scalar_f_t` | Float scalar |
+| `scalar_i32_t` | 32-bit integer scalar |
+| `scalar_i8_t` | 8-bit integer scalar |
+| `string_t` | String message |
+| `yolo_frame_t` | Camera frame with detection data |
+| `yolo_box_t` | Single detection bounding box |
 
-The main C++ API is:
+### Language-Specific Notes
 
-- `raccoon::Transport`
-- `raccoon::PublishOptions`
-- `raccoon::SubscribeOptions`
-- `raccoon::Channels`
+- **C++**: Messages auto-generated from `messages/`. Transport uses PIMPL pattern.
+- **Dart**: Keeps its own local `.lcm` copies under `dart/lib/messages/`. Includes a full LCM parser and Dart code generator. Run `build_runner` after editing `.lcm` files.
+- **Python**: Pre-generated types in `python/raccoon_transport/types/`. Regenerate with `./scripts/generate-python-types.sh`.
 
-Important details:
+---
 
-- Reliable delivery is envelope + ACK based.
-- Retained delivery replays the last cached payload for a channel.
-- Deduplication and transport latency statistics are public C++ features.
-- Reliable retransmission advances during `spinOnce()` and `spin()`.
+## Part of RaccoonOS
 
-### Python Layer
+| Repository | What it is |
+|:-----------|:-----------|
+| [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib) | Core robotics library — PID, kinematics, step-based missions |
+| [stm32-data-reader](https://github.com/htl-stp-ecer/stm32-data-reader) | Raspberry Pi ↔ STM32 SPI bridge |
+| [raccoon-cli](https://github.com/htl-stp-ecer/raccoon-cli) | Dev toolchain — scaffolding, codegen, remote sync |
+| [botui](https://github.com/htl-stp-ecer/botui) | Flutter desktop environment |
+| [documentation](https://raccoon-docs.pages.dev/) | Full platform docs |
 
-The Python package is intentionally thinner than the C++ one:
+---
 
-- `raccoon_transport.Transport`
-- `raccoon_transport.Channels`
-- `raccoon_transport.ProtocolChannels`
-- generated message classes under `raccoon_transport.types.raccoon`
+## Contributing
 
-Python implements reliable and retained behavior in pure Python on top of `lcm.LCM`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add message types, run tests, and submit changes.
 
-### Dart Layer
-
-The Dart package exports more than just transport:
-
-- `RaccoonTransport`
-- channel constants
-- the raw `Lcm` runtime
-- parser and generator internals
-- generated message classes
-
-Unlike the C++ and Python side, Dart keeps a duplicated `.lcm` tree under `dart/lib/messages/` and generates code from that local copy.
-
-## Public APIs
-
-### C++
-
-Headers:
-
-- `cpp/include/raccoon/Transport.h`
-- `cpp/include/raccoon/Options.h`
-- `cpp/include/raccoon/Channels.h`
-
-### Python
-
-Package entrypoints:
-
-- `raccoon_transport.Transport`
-- `raccoon_transport.Channels`
-- `raccoon_transport.ProtocolChannels`
-
-Generated types live under:
-
-- `raccoon_transport.types.raccoon`
-
-### Dart
-
-Main library:
-
-- `dart/lib/raccoon_transport.dart`
-
-That export surface includes transport, channels, raw LCM support, parser/generator code, and generated message classes.
-
-## Reliability And Retain
-
-Reliable delivery is opt-in and only works when both ends agree to use it.
-
-Rules contributors must preserve:
-
-- reliable publishing wraps payloads in `envelope_t`
-- subscribers ACK with `ack_t`
-- deduplication keys are based on publisher id and sequence number
-- retained replay uses `retain_request_t`
-
-One subtle but important implementation detail: `retain_request_t` handling is partially manual in every language. The C++, Python, and Dart implementations do not all rely on generated decoders in the same way. Any change to that message or its on-wire interpretation must be validated across all three languages.
-
-## Build And Test
-
-### C++
-
-The root CMake build:
-
-- fetches `lcm`
-- generates message code from `messages/`
-- builds the C++ transport library
-- builds the C++ interop tools used by integration tests
-
-### Python
-
-Local development:
-
-```bash
-pip install -e raccoon-transport/python
-```
-
-### Dart
-
-```bash
-cd raccoon-transport/dart
-dart pub get
-dart run build_runner build
-```
-
-### Integration Tests
-
-High-value tests live in `integration_tests/`:
-
-- cross-language pub/sub
-- message compatibility
-- retain replay
-- reliable delivery
-- stress tests
-
-These are the best safety net for protocol-level changes.
-
-## Contributor Notes
-
-### Adding A Message Type
-
-When you add or change a message, check all of these:
-
-1. Update the source `.lcm` file under `messages/`.
-2. Regenerate or update the Python message classes if needed.
-3. Update the duplicated Dart `.lcm` files under `dart/lib/messages/` and rerun `build_runner`.
-4. Verify channel usage and any helper constants.
-5. Run the compatibility and retain / reliable integration tests.
-
-### Avoiding Common Drift
-
-The highest-risk documentation mismatch in this repo has been assuming all languages share the exact same generated source pipeline. They do not. C++ is driven by `messages/`, but Dart keeps its own local `.lcm` copies. Any contributor README or automation change should make that split explicit.
+---
 
 ## License
 
-Copyright (C) 2026 Tobias Madlberger  
+Copyright (C) 2026 Tobias Madlberger
 Licensed under the GNU General Public License v3.0 — see [COPYING](COPYING) for details.
