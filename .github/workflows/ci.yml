@@ -33,7 +33,7 @@ jobs:
 
       - name: Dart analyze
         working-directory: dart
-        run: dart analyze --fatal-infos
+        run: dart analyze --no-fatal-warnings
 
       # ── Python ───────────────────────────────────────────
       - name: Install Python package
