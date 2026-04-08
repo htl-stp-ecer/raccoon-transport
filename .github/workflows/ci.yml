@@ -40,7 +40,7 @@ jobs:
 
       # ── Python ───────────────────────────────────────────
       - name: Install Python package
-        run: pip install --break-system-packages -e python/
+        run: pip3 install --break-system-packages -e python/
 
       - name: Verify Python imports
         run: python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
@@ -68,7 +68,7 @@ jobs:
 
       - name: Build wheel
         run: |
-          pip install --break-system-packages build
+          pip3 install --break-system-packages build
           rm -rf python/dist
           cd python && python3 -m build --wheel
 
