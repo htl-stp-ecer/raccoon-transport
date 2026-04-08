@@ -4,6 +4,11 @@ DO NOT MODIFY BY HAND!!!!
 lcm-gen 1.5.2
 """
 
+from .cam_blob_t import cam_blob_t as cam_blob_t
+from .cam_config_t import cam_config_t as cam_config_t
+from .cam_detections_t import cam_detections_t as cam_detections_t
+from .cam_frame_t import cam_frame_t as cam_frame_t
+from .cam_stream_ctl_t import cam_stream_ctl_t as cam_stream_ctl_t
 from .scalar_i32_t import scalar_i32_t as scalar_i32_t
 from .screen_render_t import screen_render_t as screen_render_t
 from .yolo_frame_t import yolo_frame_t as yolo_frame_t

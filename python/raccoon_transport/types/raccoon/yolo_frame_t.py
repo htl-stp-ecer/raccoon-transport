@@ -7,7 +7,7 @@ DO NOT MODIFY BY HAND!!!!
 from io import BytesIO
 import struct
 
-import raccoon
+from raccoon_transport.types import raccoon
 
 class yolo_frame_t(object):
 
