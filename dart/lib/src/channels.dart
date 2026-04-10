@@ -3,54 +3,54 @@ class Channels {
   Channels._();
 
   // Sensor data
-  static const gyro = 'libstp/gyro/value';
-  static const accelerometer = 'libstp/accel/value';
-  static const linearAcceleration = 'libstp/linear_accel/value';
-  static const accelVelocity = 'libstp/accel_velocity/value';
-  static const magnetometer = 'libstp/mag/value';
-  static const orientation = 'libstp/imu/quaternion';
-  static const heading = 'libstp/imu/heading';
-  static const temperature = 'libstp/imu/temp/value';
-  static const batteryVoltage = 'libstp/battery/voltage';
-  static const gyroAccuracy = 'libstp/gyro/accuracy';
-  static const accelAccuracy = 'libstp/accel/accuracy';
-  static const compassAccuracy = 'libstp/mag/accuracy';
-  static const quaternionAccuracy = 'libstp/imu/quaternion_accuracy';
-  static const cpuTemperature = 'libstp/cpu/temp/value';
+  static const gyro = 'raccoon/gyro/value';
+  static const accelerometer = 'raccoon/accel/value';
+  static const linearAcceleration = 'raccoon/linear_accel/value';
+  static const accelVelocity = 'raccoon/accel_velocity/value';
+  static const magnetometer = 'raccoon/mag/value';
+  static const orientation = 'raccoon/imu/quaternion';
+  static const heading = 'raccoon/imu/heading';
+  static const temperature = 'raccoon/imu/temp/value';
+  static const batteryVoltage = 'raccoon/battery/voltage';
+  static const gyroAccuracy = 'raccoon/gyro/accuracy';
+  static const accelAccuracy = 'raccoon/accel/accuracy';
+  static const compassAccuracy = 'raccoon/mag/accuracy';
+  static const quaternionAccuracy = 'raccoon/imu/quaternion_accuracy';
+  static const cpuTemperature = 'raccoon/cpu/temp/value';
 
   // Screen
-  static const screenRender = 'libstp/screen_render';
-  static const screenRenderAnswer = 'libstp/screen_render/answer';
+  static const screenRender = 'raccoon/screen_render';
+  static const screenRenderAnswer = 'raccoon/screen_render/answer';
 
   // Camera
-  static const camDetections = 'libstp/cam/detections';
-  static const camFrame = 'libstp/cam/frame';
-  static const camStreamCtl = 'libstp/cam/stream_ctl';
-  static const camConfig = 'libstp/cam/config';
+  static const camDetections = 'raccoon/cam/detections';
+  static const camFrame = 'raccoon/cam/frame';
+  static const camStreamCtl = 'raccoon/cam/stream_ctl';
+  static const camConfig = 'raccoon/cam/config';
 
   // System
-  static const errorMessages = 'libstp/errors';
-  static const shutdownCmd = 'libstp/system/shutdown_cmd';
-  static const shutdownStatus = 'libstp/system/shutdown_status';
+  static const errorMessages = 'raccoon/errors';
+  static const shutdownCmd = 'raccoon/system/shutdown_cmd';
+  static const shutdownStatus = 'raccoon/system/shutdown_status';
 
   // Parametric channels
-  static String servoMode(int port) => 'libstp/servo/$port/mode';
-  static String servoPosition(int port) => 'libstp/servo/$port/position';
-  static String servoPositionCommand(int port) => 'libstp/servo/$port/position_cmd';
-  static String backEmf(int port) => 'libstp/bemf/$port/value';
-  static String analog(int port) => 'libstp/analog/$port/value';
-  static String digital(int bit) => 'libstp/digital/$bit/value';
-  static String motorPowerCommand(int port) => 'libstp/motor/$port/power_cmd';
-  static String motorModeCommand(int port) => 'libstp/motor/$port/mode_cmd';
-  static String motorStopCommand(int port) => 'libstp/motor/$port/stop_cmd';
-  static String motorVelocityCommand(int port) => 'libstp/motor/$port/velocity_cmd';
-  static String motorPositionCommand(int port) => 'libstp/motor/$port/position_cmd';
-  static String motorRelativeCommand(int port) => 'libstp/motor/$port/relative_cmd';
-  static String motorPidCommand(int port) => 'libstp/motor/$port/pid_cmd';
-  static String motorPositionResetCommand(int port) => 'libstp/motor/$port/position_reset_cmd';
-  static String motorPower(int port) => 'libstp/motor/$port/power';
-  static String motorPosition(int port) => 'libstp/motor/$port/position';
-  static String motorDone(int port) => 'libstp/motor/$port/done';
+  static String servoMode(int port) => 'raccoon/servo/$port/mode';
+  static String servoPosition(int port) => 'raccoon/servo/$port/position';
+  static String servoPositionCommand(int port) => 'raccoon/servo/$port/position_cmd';
+  static String backEmf(int port) => 'raccoon/bemf/$port/value';
+  static String analog(int port) => 'raccoon/analog/$port/value';
+  static String digital(int bit) => 'raccoon/digital/$bit/value';
+  static String motorPowerCommand(int port) => 'raccoon/motor/$port/power_cmd';
+  static String motorModeCommand(int port) => 'raccoon/motor/$port/mode_cmd';
+  static String motorStopCommand(int port) => 'raccoon/motor/$port/stop_cmd';
+  static String motorVelocityCommand(int port) => 'raccoon/motor/$port/velocity_cmd';
+  static String motorPositionCommand(int port) => 'raccoon/motor/$port/position_cmd';
+  static String motorRelativeCommand(int port) => 'raccoon/motor/$port/relative_cmd';
+  static String motorPidCommand(int port) => 'raccoon/motor/$port/pid_cmd';
+  static String motorPositionResetCommand(int port) => 'raccoon/motor/$port/position_reset_cmd';
+  static String motorPower(int port) => 'raccoon/motor/$port/power';
+  static String motorPosition(int port) => 'raccoon/motor/$port/position';
+  static String motorDone(int port) => 'raccoon/motor/$port/done';
 }
 
 /// Internal protocol channels

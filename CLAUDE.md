@@ -84,7 +84,7 @@ PYTHONPATH=. pytest integration_tests/ -v -k "dart"
 - Tests: cross-pubsub, message compat, retain protocol, stress/concurrency
 
 ### Channel Naming
-All channels follow pattern `libstp/<device>/<property>`.
+All channels follow pattern `raccoon/<device>/<property>`.
 Protocol channels use `__raccoon/` prefix.
 
 ## Consumer Integration

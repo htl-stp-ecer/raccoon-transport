@@ -5,134 +5,134 @@
 namespace raccoon::Channels
 {
     // Sensor data
-    constexpr auto GYRO = "libstp/gyro/value";
-    constexpr auto ACCELEROMETER = "libstp/accel/value";
-    constexpr auto LINEAR_ACCELERATION = "libstp/linear_accel/value";
-    constexpr auto ACCEL_VELOCITY = "libstp/accel_velocity/value";
-    constexpr auto MAGNETOMETER = "libstp/mag/value";
-    constexpr auto DMP_ORIENTATION = "libstp/imu/quaternion";
-    constexpr auto HEADING = "libstp/imu/heading";
-    constexpr auto TEMPERATURE = "libstp/imu/temp/value";
-    constexpr auto BATTERY_VOLTAGE = "libstp/battery/voltage";
-    constexpr auto GYRO_ACCURACY = "libstp/gyro/accuracy";
-    constexpr auto ACCEL_ACCURACY = "libstp/accel/accuracy";
-    constexpr auto COMPASS_ACCURACY = "libstp/mag/accuracy";
-    constexpr auto QUATERNION_ACCURACY = "libstp/imu/quaternion_accuracy";
-    constexpr auto CPU_TEMPERATURE = "libstp/cpu/temp/value";
+    constexpr auto GYRO = "raccoon/gyro/value";
+    constexpr auto ACCELEROMETER = "raccoon/accel/value";
+    constexpr auto LINEAR_ACCELERATION = "raccoon/linear_accel/value";
+    constexpr auto ACCEL_VELOCITY = "raccoon/accel_velocity/value";
+    constexpr auto MAGNETOMETER = "raccoon/mag/value";
+    constexpr auto DMP_ORIENTATION = "raccoon/imu/quaternion";
+    constexpr auto HEADING = "raccoon/imu/heading";
+    constexpr auto TEMPERATURE = "raccoon/imu/temp/value";
+    constexpr auto BATTERY_VOLTAGE = "raccoon/battery/voltage";
+    constexpr auto GYRO_ACCURACY = "raccoon/gyro/accuracy";
+    constexpr auto ACCEL_ACCURACY = "raccoon/accel/accuracy";
+    constexpr auto COMPASS_ACCURACY = "raccoon/mag/accuracy";
+    constexpr auto QUATERNION_ACCURACY = "raccoon/imu/quaternion_accuracy";
+    constexpr auto CPU_TEMPERATURE = "raccoon/cpu/temp/value";
 
     // Odometry (computed on STM32)
-    constexpr auto ODOM_POS_X = "libstp/odometry/pos_x";
-    constexpr auto ODOM_POS_Y = "libstp/odometry/pos_y";
-    constexpr auto ODOM_HEADING = "libstp/odometry/heading";
-    constexpr auto ODOM_VX = "libstp/odometry/vx";
-    constexpr auto ODOM_VY = "libstp/odometry/vy";
-    constexpr auto ODOM_WZ = "libstp/odometry/wz";
+    constexpr auto ODOM_POS_X = "raccoon/odometry/pos_x";
+    constexpr auto ODOM_POS_Y = "raccoon/odometry/pos_y";
+    constexpr auto ODOM_HEADING = "raccoon/odometry/heading";
+    constexpr auto ODOM_VX = "raccoon/odometry/vx";
+    constexpr auto ODOM_VY = "raccoon/odometry/vy";
+    constexpr auto ODOM_WZ = "raccoon/odometry/wz";
 
     // Odometry commands (from library to Pi reader)
-    constexpr auto KINEMATICS_CONFIG_CMD = "libstp/kinematics/config_cmd";
-    constexpr auto ODOM_RESET_CMD = "libstp/odometry/reset_cmd";
+    constexpr auto KINEMATICS_CONFIG_CMD = "raccoon/kinematics/config_cmd";
+    constexpr auto ODOM_RESET_CMD = "raccoon/odometry/reset_cmd";
 
     // Screen
-    constexpr auto SCREEN_RENDER = "libstp/screen_render";
-    constexpr auto SCREEN_RENDER_ANSWER = "libstp/screen_render/answer";
+    constexpr auto SCREEN_RENDER = "raccoon/screen_render";
+    constexpr auto SCREEN_RENDER_ANSWER = "raccoon/screen_render/answer";
 
     // Vision
-    constexpr auto YOLO_FRAME = "libstp/yolo/frame";
+    constexpr auto YOLO_FRAME = "raccoon/yolo/frame";
 
     // Camera
-    constexpr auto CAM_DETECTIONS = "libstp/cam/detections";
+    constexpr auto CAM_DETECTIONS = "raccoon/cam/detections";
 
     // System
-    constexpr auto ERROR_MESSAGES = "libstp/errors";
-    constexpr auto SHUTDOWN_CMD = "libstp/system/shutdown_cmd";
-    constexpr auto SHUTDOWN_STATUS = "libstp/system/shutdown_status";
+    constexpr auto ERROR_MESSAGES = "raccoon/errors";
+    constexpr auto SHUTDOWN_CMD = "raccoon/system/shutdown_cmd";
+    constexpr auto SHUTDOWN_STATUS = "raccoon/system/shutdown_status";
 
     // Parametric channels (port-indexed)
     using PortId = int;
 
     inline std::string servoMode(const PortId port)
     {
-        return "libstp/servo/" + std::to_string(port) + "/mode";
+        return "raccoon/servo/" + std::to_string(port) + "/mode";
     }
 
     inline std::string servoPosition(const PortId port)
     {
-        return "libstp/servo/" + std::to_string(port) + "/position";
+        return "raccoon/servo/" + std::to_string(port) + "/position";
     }
 
     inline std::string servoPositionCommand(const PortId port)
     {
-        return "libstp/servo/" + std::to_string(port) + "/position_cmd";
+        return "raccoon/servo/" + std::to_string(port) + "/position_cmd";
     }
 
     inline std::string backEmf(const PortId port)
     {
-        return "libstp/bemf/" + std::to_string(port) + "/value";
+        return "raccoon/bemf/" + std::to_string(port) + "/value";
     }
 
     inline std::string analog(const PortId port)
     {
-        return "libstp/analog/" + std::to_string(port) + "/value";
+        return "raccoon/analog/" + std::to_string(port) + "/value";
     }
 
     inline std::string digital(const PortId bit)
     {
-        return "libstp/digital/" + std::to_string(bit) + "/value";
+        return "raccoon/digital/" + std::to_string(bit) + "/value";
     }
 
     inline std::string motorPowerCommand(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/power_cmd";
+        return "raccoon/motor/" + std::to_string(port) + "/power_cmd";
     }
 
     inline std::string motorModeCommand(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/mode_cmd";
+        return "raccoon/motor/" + std::to_string(port) + "/mode_cmd";
     }
 
     inline std::string motorStopCommand(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/stop_cmd";
+        return "raccoon/motor/" + std::to_string(port) + "/stop_cmd";
     }
 
     inline std::string motorVelocityCommand(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/velocity_cmd";
+        return "raccoon/motor/" + std::to_string(port) + "/velocity_cmd";
     }
 
     inline std::string motorPositionCommand(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/position_cmd";
+        return "raccoon/motor/" + std::to_string(port) + "/position_cmd";
     }
 
     inline std::string motorRelativeCommand(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/relative_cmd";
+        return "raccoon/motor/" + std::to_string(port) + "/relative_cmd";
     }
 
     inline std::string motorPidCommand(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/pid_cmd";
+        return "raccoon/motor/" + std::to_string(port) + "/pid_cmd";
     }
 
     inline std::string motorPositionResetCommand(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/position_reset_cmd";
+        return "raccoon/motor/" + std::to_string(port) + "/position_reset_cmd";
     }
 
     inline std::string motorPower(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/power";
+        return "raccoon/motor/" + std::to_string(port) + "/power";
     }
 
     inline std::string motorPosition(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/position";
+        return "raccoon/motor/" + std::to_string(port) + "/position";
     }
 
     inline std::string motorDone(const PortId port)
     {
-        return "libstp/motor/" + std::to_string(port) + "/done";
+        return "raccoon/motor/" + std::to_string(port) + "/done";
     }
 
     // Protocol channels (internal)

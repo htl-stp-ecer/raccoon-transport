@@ -151,7 +151,7 @@ PYTHONPATH=. pytest integration_tests/test_stress.py -v
 
 ### Channel Naming
 
-All channels follow the pattern `libstp/<device>/<property>`. Protocol channels use the `__raccoon/` prefix.
+All channels follow the pattern `raccoon/<device>/<property>`. Protocol channels use the `__raccoon/` prefix.
 
 ### Message Types
 

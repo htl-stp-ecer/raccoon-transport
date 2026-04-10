@@ -5,109 +5,109 @@ class Channels:
     """Stable application-level channel names used by the Python transport."""
 
     # Sensor data
-    GYRO = "libstp/gyro/value"
-    ACCELEROMETER = "libstp/accel/value"
-    LINEAR_ACCELERATION = "libstp/linear_accel/value"
-    ACCEL_VELOCITY = "libstp/accel_velocity/value"
-    MAGNETOMETER = "libstp/mag/value"
-    ORIENTATION = "libstp/imu/quaternion"
-    HEADING = "libstp/imu/heading"
-    TEMPERATURE = "libstp/imu/temp/value"
-    BATTERY_VOLTAGE = "libstp/battery/voltage"
-    GYRO_ACCURACY = "libstp/gyro/accuracy"
-    ACCEL_ACCURACY = "libstp/accel/accuracy"
-    COMPASS_ACCURACY = "libstp/mag/accuracy"
-    QUATERNION_ACCURACY = "libstp/imu/quaternion_accuracy"
-    CPU_TEMPERATURE = "libstp/cpu/temp/value"
+    GYRO = "raccoon/gyro/value"
+    ACCELEROMETER = "raccoon/accel/value"
+    LINEAR_ACCELERATION = "raccoon/linear_accel/value"
+    ACCEL_VELOCITY = "raccoon/accel_velocity/value"
+    MAGNETOMETER = "raccoon/mag/value"
+    ORIENTATION = "raccoon/imu/quaternion"
+    HEADING = "raccoon/imu/heading"
+    TEMPERATURE = "raccoon/imu/temp/value"
+    BATTERY_VOLTAGE = "raccoon/battery/voltage"
+    GYRO_ACCURACY = "raccoon/gyro/accuracy"
+    ACCEL_ACCURACY = "raccoon/accel/accuracy"
+    COMPASS_ACCURACY = "raccoon/mag/accuracy"
+    QUATERNION_ACCURACY = "raccoon/imu/quaternion_accuracy"
+    CPU_TEMPERATURE = "raccoon/cpu/temp/value"
 
     # Screen
-    SCREEN_RENDER = "libstp/screen_render"
-    SCREEN_RENDER_ANSWER = "libstp/screen_render/answer"
+    SCREEN_RENDER = "raccoon/screen_render"
+    SCREEN_RENDER_ANSWER = "raccoon/screen_render/answer"
 
     # Vision
-    YOLO_FRAME = "libstp/yolo/frame"
+    YOLO_FRAME = "raccoon/yolo/frame"
 
     # System
-    ERROR_MESSAGES = "libstp/errors"
-    SHUTDOWN_CMD = "libstp/system/shutdown_cmd"
-    SHUTDOWN_STATUS = "libstp/system/shutdown_status"
+    ERROR_MESSAGES = "raccoon/errors"
+    SHUTDOWN_CMD = "raccoon/system/shutdown_cmd"
+    SHUTDOWN_STATUS = "raccoon/system/shutdown_status"
 
     # Parametric channels
     @staticmethod
     def servo_mode(port: int) -> str:
-        return f"libstp/servo/{port}/mode"
+        return f"raccoon/servo/{port}/mode"
 
     @staticmethod
     def servo_position(port: int) -> str:
-        return f"libstp/servo/{port}/position"
+        return f"raccoon/servo/{port}/position"
 
     @staticmethod
     def servo_position_command(port: int) -> str:
-        return f"libstp/servo/{port}/position_cmd"
+        return f"raccoon/servo/{port}/position_cmd"
 
     @staticmethod
     def back_emf(port: int) -> str:
-        return f"libstp/bemf/{port}/value"
+        return f"raccoon/bemf/{port}/value"
 
     @staticmethod
     def bemf_scale_command(port: int) -> str:
-        return f"libstp/bemf/{port}/scale_cmd"
+        return f"raccoon/bemf/{port}/scale_cmd"
 
     @staticmethod
     def bemf_offset_command(port: int) -> str:
-        return f"libstp/bemf/{port}/offset_cmd"
+        return f"raccoon/bemf/{port}/offset_cmd"
 
     @staticmethod
     def analog(port: int) -> str:
-        return f"libstp/analog/{port}/value"
+        return f"raccoon/analog/{port}/value"
 
     @staticmethod
     def digital(bit: int) -> str:
-        return f"libstp/digital/{bit}/value"
+        return f"raccoon/digital/{bit}/value"
 
     @staticmethod
     def motor_power_command(port: int) -> str:
-        return f"libstp/motor/{port}/power_cmd"
+        return f"raccoon/motor/{port}/power_cmd"
 
     @staticmethod
     def motor_mode_command(port: int) -> str:
-        return f"libstp/motor/{port}/mode_cmd"
+        return f"raccoon/motor/{port}/mode_cmd"
 
     @staticmethod
     def motor_stop_command(port: int) -> str:
-        return f"libstp/motor/{port}/stop_cmd"
+        return f"raccoon/motor/{port}/stop_cmd"
 
     @staticmethod
     def motor_velocity_command(port: int) -> str:
-        return f"libstp/motor/{port}/velocity_cmd"
+        return f"raccoon/motor/{port}/velocity_cmd"
 
     @staticmethod
     def motor_position_command(port: int) -> str:
-        return f"libstp/motor/{port}/position_cmd"
+        return f"raccoon/motor/{port}/position_cmd"
 
     @staticmethod
     def motor_relative_command(port: int) -> str:
-        return f"libstp/motor/{port}/relative_cmd"
+        return f"raccoon/motor/{port}/relative_cmd"
 
     @staticmethod
     def motor_pid_command(port: int) -> str:
-        return f"libstp/motor/{port}/pid_cmd"
+        return f"raccoon/motor/{port}/pid_cmd"
 
     @staticmethod
     def motor_position_reset_command(port: int) -> str:
-        return f"libstp/motor/{port}/position_reset_cmd"
+        return f"raccoon/motor/{port}/position_reset_cmd"
 
     @staticmethod
     def motor_power(port: int) -> str:
-        return f"libstp/motor/{port}/power"
+        return f"raccoon/motor/{port}/power"
 
     @staticmethod
     def motor_position(port: int) -> str:
-        return f"libstp/motor/{port}/position"
+        return f"raccoon/motor/{port}/position"
 
     @staticmethod
     def motor_done(port: int) -> str:
-        return f"libstp/motor/{port}/done"
+        return f"raccoon/motor/{port}/done"
 
 
 class ProtocolChannels:

@@ -83,7 +83,7 @@ Channel constants are defined in three places (one per language). Keep them in s
 | Python | `python/raccoon_transport/channels.py` |
 | Dart | `dart/lib/src/channels.dart` |
 
-All channels follow the naming pattern `libstp/<device>/<property>`.
+All channels follow the naming pattern `raccoon/<device>/<property>`.
 
 ---
 
