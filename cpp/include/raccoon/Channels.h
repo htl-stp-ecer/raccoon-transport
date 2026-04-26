@@ -65,6 +65,11 @@ namespace raccoon::Channels
         return "raccoon/servo/" + std::to_string(port) + "/position_cmd";
     }
 
+    inline std::string servoSmoothPositionCommand(const PortId port)
+    {
+        return "raccoon/servo/" + std::to_string(port) + "/smooth_cmd";
+    }
+
     inline std::string backEmf(const PortId port)
     {
         return "raccoon/bemf/" + std::to_string(port) + "/value";
