@@ -46,6 +46,7 @@ namespace raccoon::Channels
     constexpr auto ERROR_MESSAGES = "raccoon/errors";
     constexpr auto SHUTDOWN_CMD = "raccoon/system/shutdown_cmd";
     constexpr auto SHUTDOWN_STATUS = "raccoon/system/shutdown_status";
+    constexpr auto HEARTBEAT_CMD = "raccoon/system/heartbeat_cmd";
 
     // Parametric channels (port-indexed)
     using PortId = int;
