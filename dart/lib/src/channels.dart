@@ -37,6 +37,7 @@ class Channels {
   static String servoMode(int port) => 'raccoon/servo/$port/mode';
   static String servoPosition(int port) => 'raccoon/servo/$port/position';
   static String servoPositionCommand(int port) => 'raccoon/servo/$port/position_cmd';
+  static String servoSmoothPositionCommand(int port) => 'raccoon/servo/$port/smooth_cmd';
   static String backEmf(int port) => 'raccoon/bemf/$port/value';
   static String analog(int port) => 'raccoon/analog/$port/value';
   static String digital(int bit) => 'raccoon/digital/$bit/value';
