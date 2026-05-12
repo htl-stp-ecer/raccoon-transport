@@ -10,6 +10,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(FetchContent)
 
 # ---------- LCM ----------
+# When cross-compiling, lcm-gen must execute on the HOST (x86_64), but the LCM
+# C library must be compiled for the TARGET (aarch64).
+# Strategy: detect cross-compilation and use the system-installed host lcm-gen
+# for code generation, while still building the LCM library from source for the
+# target architecture via FetchContent.
 set(LCM_ENABLE_JAVA OFF CACHE BOOL "" FORCE)
 set(LCM_ENABLE_PYTHON OFF CACHE BOOL "" FORCE)
 set(LCM_ENABLE_DOCS OFF CACHE BOOL "" FORCE)
@@ -23,6 +28,19 @@ FetchContent_MakeAvailable(lcm)
 
 # lcm_wrap_types is defined in lcmUtilities.cmake
 include(${lcm_SOURCE_DIR}/lcm-cmake/lcmUtilities.cmake)
+
+if(CMAKE_CROSSCOMPILING)
+  # When cross-compiling, lcm-gen was not built (lcmgen/ subdir is skipped via
+  # a patch applied by build-cross.sh). Provide it as an IMPORTED EXECUTABLE
+  # pointing to the host-installed lcm-gen so that lcm_wrap_types() custom
+  # commands (which reference the "lcm-gen" CMake target) work correctly.
+  find_program(_host_lcm_gen lcm-gen REQUIRED
+    PATHS /usr/bin /usr/local/bin
+    NO_CMAKE_FIND_ROOT_PATH)
+  add_executable(lcm-gen IMPORTED GLOBAL)
+  set_target_properties(lcm-gen PROPERTIES IMPORTED_LOCATION "${_host_lcm_gen}")
+  message(STATUS "Cross-compile: using host lcm-gen at ${_host_lcm_gen}")
+endif()
 
 # ---------- Messages ----------
 add_subdirectory(messages)
