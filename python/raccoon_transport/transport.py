@@ -205,6 +205,8 @@ class Transport:
             chan_len = struct.unpack_from(">i", data, offset)[0]
             offset += 4
             requested_channel = data[offset : offset + chan_len].decode("utf-8")
+            if requested_channel.endswith("\x00"):
+                requested_channel = requested_channel[:-1]
 
             cached = self._retain_cache.get(requested_channel)
             if cached is not None:

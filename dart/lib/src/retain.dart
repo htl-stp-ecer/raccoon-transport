@@ -31,7 +31,10 @@ class RetainStore {
     // Read channel (LCM string: int32 len + bytes)
     final channelLen = buf.getInt32();
     final channelBytes = buf.getUint8List(channelLen);
-    final requestedChannel = String.fromCharCodes(channelBytes);
+    var requestedChannel = String.fromCharCodes(channelBytes);
+    if (requestedChannel.endsWith('\x00')) {
+      requestedChannel = requestedChannel.substring(0, requestedChannel.length - 1);
+    }
 
     final cached = _cache[requestedChannel];
     if (cached != null && _lcm != null) {

@@ -25,6 +25,9 @@ jobs:
           cmake ..
           cmake --build . -j$(nproc)
 
+      - name: Run C++ unit tests
+        run: ctest --test-dir build --output-on-failure
+
       # ── Dart ─────────────────────────────────────────────
       - name: Dart pub get
         working-directory: dart
@@ -38,12 +41,19 @@ jobs:
         working-directory: dart
         run: dart analyze --no-fatal-warnings
 
+      - name: Dart unit tests
+        working-directory: dart
+        run: dart test test/transport_unit_test.dart
+
       # ── Python ───────────────────────────────────────────
       - name: Install Python package
         run: pip3 install --break-system-packages -e python/ pytest
 
       - name: Verify Python imports
         run: python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
+
+      - name: Python unit tests
+        run: python3 -m pytest python/tests/ -v
 
       # ── Integration tests ────────────────────────────────
       - name: Run integration tests
