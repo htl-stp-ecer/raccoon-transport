@@ -23,14 +23,20 @@ jobs:
         run: |
           rm -rf build && mkdir build && cd build
           if [[ "$(uname -s)" == "Darwin" ]]; then
-            cmake -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" ..
+            arch -arm64 cmake -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_APPLE_SILICON_PROCESSOR=arm64 ..
+            arch -arm64 cmake --build . -j"$(sysctl -n hw.ncpu)"
           else
             cmake ..
+            cmake --build . -j$(nproc)
           fi
-          cmake --build . -j$(nproc)
 
       - name: Run C++ unit tests
-        run: ctest --test-dir build --output-on-failure
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 ctest --test-dir build --output-on-failure
+          else
+            ctest --test-dir build --output-on-failure
+          fi
 
       # ── Dart ─────────────────────────────────────────────
       - name: Dart pub get
