@@ -57,17 +57,37 @@ jobs:
 
       # ── Python ───────────────────────────────────────────
       - name: Install Python package
-        run: pip3 install --break-system-packages -e python/ pytest
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 python3 -m pip install --break-system-packages -e python/ pytest
+          else
+            python3 -m pip install --break-system-packages -e python/ pytest
+          fi
 
       - name: Verify Python imports
-        run: python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
+          else
+            python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
+          fi
 
       - name: Python unit tests
-        run: python3 -m pytest python/tests/ -v
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 python3 -m pytest python/tests/ -v
+          else
+            python3 -m pytest python/tests/ -v
+          fi
 
       # ── Integration tests ────────────────────────────────
       - name: Run integration tests
-        run: PYTHONPATH=. python3 -m pytest integration_tests/ -v
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            PYTHONPATH=. arch -arm64 python3 -m pytest integration_tests/ -v
+          else
+            PYTHONPATH=. python3 -m pytest integration_tests/ -v
+          fi
 
   build-and-release:
     needs: build-and-test
