@@ -22,7 +22,11 @@ jobs:
       - name: Build C++ library and interop tools
         run: |
           rm -rf build && mkdir build && cd build
-          cmake ..
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            cmake -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" ..
+          else
+            cmake ..
+          fi
           cmake --build . -j$(nproc)
 
       - name: Run C++ unit tests
