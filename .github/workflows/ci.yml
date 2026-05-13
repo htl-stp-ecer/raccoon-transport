@@ -16,7 +16,7 @@ jobs:
       run:
         shell: bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # ── C++ ──────────────────────────────────────────────
       - name: Build C++ library and interop tools
@@ -100,7 +100,7 @@ jobs:
         shell: bash --noprofile --norc -eo pipefail {0}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Patch version
         run: |
@@ -113,7 +113,7 @@ jobs:
           cd python && python3 -m build --wheel
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
