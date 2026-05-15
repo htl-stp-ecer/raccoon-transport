@@ -14,16 +14,29 @@ jobs:
     runs-on: self-hosted
     defaults:
       run:
-        shell: arch -arm64 bash --noprofile --norc -eo pipefail {0}
+        shell: bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # ── C++ ──────────────────────────────────────────────
       - name: Build C++ library and interop tools
         run: |
           rm -rf build && mkdir build && cd build
-          cmake ..
-          cmake --build . -j$(nproc)
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 cmake -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_APPLE_SILICON_PROCESSOR=arm64 ..
+            arch -arm64 cmake --build . -j"$(sysctl -n hw.ncpu)"
+          else
+            cmake ..
+            cmake --build . -j$(nproc)
+          fi
+
+      - name: Run C++ unit tests
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 ctest --test-dir build --output-on-failure
+          else
+            ctest --test-dir build --output-on-failure
+          fi
 
       # ── Dart ─────────────────────────────────────────────
       - name: Dart pub get
@@ -38,16 +51,43 @@ jobs:
         working-directory: dart
         run: dart analyze --no-fatal-warnings
 
+      - name: Dart unit tests
+        working-directory: dart
+        run: dart test test/transport_unit_test.dart
+
       # ── Python ───────────────────────────────────────────
       - name: Install Python package
-        run: pip3 install --break-system-packages -e python/ pytest
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 python3 -m pip install --break-system-packages -e python/ pytest
+          else
+            python3 -m pip install --break-system-packages -e python/ pytest
+          fi
 
       - name: Verify Python imports
-        run: python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
+          else
+            python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
+          fi
+
+      - name: Python unit tests
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            arch -arm64 python3 -m pytest python/tests/ -v
+          else
+            python3 -m pytest python/tests/ -v
+          fi
 
       # ── Integration tests ────────────────────────────────
       - name: Run integration tests
-        run: PYTHONPATH=. python3 -m pytest integration_tests/ -v
+        run: |
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            PYTHONPATH=. arch -arm64 python3 -m pytest integration_tests/ -v
+          else
+            PYTHONPATH=. python3 -m pytest integration_tests/ -v
+          fi
 
   build-and-release:
     needs: build-and-test
@@ -57,10 +97,10 @@ jobs:
       contents: write
     defaults:
       run:
-        shell: arch -arm64 bash --noprofile --norc -eo pipefail {0}
+        shell: bash --noprofile --norc -eo pipefail {0}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Patch version
         run: |
@@ -73,7 +113,7 @@ jobs:
           cd python && python3 -m build --wheel
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}

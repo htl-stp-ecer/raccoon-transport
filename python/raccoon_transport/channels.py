@@ -31,6 +31,7 @@ class Channels:
     ERROR_MESSAGES = "raccoon/errors"
     SHUTDOWN_CMD = "raccoon/system/shutdown_cmd"
     SHUTDOWN_STATUS = "raccoon/system/shutdown_status"
+    HEARTBEAT_CMD = "raccoon/system/heartbeat_cmd"
 
     # Parametric channels
     @staticmethod
