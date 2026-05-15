@@ -46,6 +46,7 @@ namespace raccoon::Channels
     constexpr auto ERROR_MESSAGES = "raccoon/errors";
     constexpr auto SHUTDOWN_CMD = "raccoon/system/shutdown_cmd";
     constexpr auto SHUTDOWN_STATUS = "raccoon/system/shutdown_status";
+    constexpr auto HEARTBEAT_CMD = "raccoon/system/heartbeat_cmd";
 
     // Parametric channels (port-indexed)
     using PortId = int;
@@ -63,6 +64,11 @@ namespace raccoon::Channels
     inline std::string servoPositionCommand(const PortId port)
     {
         return "raccoon/servo/" + std::to_string(port) + "/position_cmd";
+    }
+
+    inline std::string servoSmoothPositionCommand(const PortId port)
+    {
+        return "raccoon/servo/" + std::to_string(port) + "/smooth_cmd";
     }
 
     inline std::string backEmf(const PortId port)
