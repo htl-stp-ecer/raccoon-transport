@@ -60,9 +60,22 @@ namespace raccoon
         bool publish(const std::string& channel, const T& message,
                      const PublishOptions& options = {})
         {
-            int maxLen = message.getEncodedSize();
+            // Auto-stamp the timestamp if the caller left it at the default 0.
+            // Every raccoon LCM type carries a `timestamp` field (see the
+            // `LcmMessage` concept) and downstream consumers dedupe by it;
+            // forcing every caller to set the timestamp manually has proven
+            // to be a reliable foot-gun. Non-zero values are left alone so
+            // replay / test / explicit-timestamp use cases keep working.
+            T stamped = message;
+            if (stamped.timestamp == 0)
+            {
+                stamped.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+            }
+
+            int maxLen = stamped.getEncodedSize();
             std::vector<uint8_t> buf(maxLen);
-            int encodedLen = message.encode(buf.data(), 0, maxLen);
+            int encodedLen = stamped.encode(buf.data(), 0, maxLen);
             if (encodedLen < 0) return false;
             return publishRaw(channel, buf.data(), encodedLen, options);
         }

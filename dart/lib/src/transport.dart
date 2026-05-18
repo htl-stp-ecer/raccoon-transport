@@ -73,6 +73,21 @@ class RaccoonTransport {
   /// Publish a typed LCM message on a channel
   int publishMessage<T extends LcmMessage>(String channel, T message,
       {PublishOptions options = const PublishOptions()}) {
+    // Auto-stamp `timestamp` if the caller left it at the default 0. Every
+    // raccoon LCM type carries a `timestamp` field and downstream consumers
+    // dedupe by it — forcing callers to set it manually has proven to be a
+    // reliable foot-gun. Non-zero values are left alone so explicit /
+    // replay use cases keep working. Done via dynamic dispatch because
+    // the `LcmMessage` interface does not expose the field statically.
+    try {
+      final dyn = message as dynamic;
+      if (dyn.timestamp == 0) {
+        dyn.timestamp = DateTime.now().microsecondsSinceEpoch;
+      }
+    } catch (_) {
+      // Message type does not expose a `timestamp` field — leave untouched.
+    }
+
     // Estimate buffer size generously
     final buf = LcmBuffer(65536);
     message.encode(buf);

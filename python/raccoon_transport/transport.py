@@ -62,6 +62,17 @@ class Transport:
             retry_interval_ms: Delay between retransmissions in reliable mode.
             max_retries: Maximum number of send attempts in reliable mode.
         """
+        # Every raccoon LCM type carries a ``timestamp`` field and downstream
+        # consumers (e.g. stm32-data-reader's CommandSubscriber) dedupe by it.
+        # Leaving it at the default 0 silently drops every message after the
+        # first one. Auto-stamp here so callers don't each have to remember.
+        # A non-zero value is treated as caller-supplied and left alone.
+        try:
+            if getattr(message, "timestamp", None) == 0:
+                message.timestamp = int(time.time() * 1e6)
+        except AttributeError:
+            pass
+
         encoded = message.encode()
         if reliable:
             self._reliable_publish(channel, encoded, retry_interval_ms, max_retries)
