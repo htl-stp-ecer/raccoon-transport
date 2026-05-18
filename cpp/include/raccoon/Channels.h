@@ -48,6 +48,10 @@ namespace raccoon::Channels
     constexpr auto SHUTDOWN_STATUS = "raccoon/system/shutdown_status";
     constexpr auto HEARTBEAT_CMD = "raccoon/system/heartbeat_cmd";
 
+    // Feature flags (runtime opt-in toggles)
+    constexpr auto BEMF_ENABLED_CMD = "raccoon/cmd/feature/bemf_enabled";
+    constexpr auto BEMF_ENABLED = "raccoon/feature/bemf_enabled";
+
     // Parametric channels (port-indexed)
     using PortId = int;
 
