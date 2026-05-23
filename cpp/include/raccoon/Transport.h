@@ -32,6 +32,16 @@ namespace raccoon
      * The implementation is hidden behind a PIMPL. Public users interact
      * through typed `publish<T>()` and `subscribe<T>()` helpers or their raw
      * equivalents when a message type is not available at compile time.
+     *
+     * Thread safety: every public method is safe to call from any thread.
+     * The implementation serializes all underlying LCM API calls with a
+     * single recursive mutex, which mirrors LCM's documented "use from one
+     * thread" constraint while still letting N writers publish concurrently
+     * (writers serialize, they don't race). `spin()` releases the mutex
+     * between iterations so concurrent publishers see at most ~10 ms of
+     * scheduling delay even when a reader thread is active on the same
+     * Transport. Subscriber callbacks are dispatched with the mutex held;
+     * a callback that publishes back works because the lock is recursive.
      */
     class Transport
     {

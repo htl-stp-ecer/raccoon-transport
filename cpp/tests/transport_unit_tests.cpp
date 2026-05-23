@@ -11,13 +11,17 @@
 #include <raccoon/retain_request_t.hpp>
 #include <raccoon/scalar_i32_t.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -451,7 +455,186 @@ namespace
         require(reset.latency.maxUs == 0, "reset latency max should be zeroed");
         require(reset.latency.avgUs == 0, "reset latency avg should be zeroed");
     }
-}
+
+    void testConcurrentPublishersDoNotCorruptMessages()
+    {
+        // Reproducer for the production symptom "heartbeats stop coming once
+        // Localization is running." raccoon::Transport sits in front of an
+        // LCM handle that is documented as single-threaded; without the
+        // internal mutex, two threads publishing concurrently would race on
+        // the UDP send buffer and on the dedup cache. With the guard in
+        // place every byte the writer sent must reach the subscriber, no
+        // matter how many writers fired in parallel.
+        constexpr int kWriters       = 8;
+        constexpr int kPublishesPer  = 200;
+        constexpr int kExpectedTotal = kWriters * kPublishesPer;
+
+        auto transport = raccoon::Transport::create("memq://");
+
+        std::mutex                     receivedMutex;
+        std::vector<std::vector<uint8_t>> received;
+        received.reserve(kExpectedTotal);
+
+        require(transport.subscribeRaw("unit/concurrent",
+            [&](const void* data, int len)
+            {
+                std::lock_guard<std::mutex> lock(receivedMutex);
+                const auto* bytes = static_cast<const uint8_t*>(data);
+                received.emplace_back(bytes, bytes + len);
+            }), "failed to subscribe capture handler");
+
+        // Each thread sends payloads of the form {writer_id, seq_lo, seq_hi}
+        // so the receiver can verify every (writer, seq) combination arrives
+        // exactly once with intact bytes.
+        std::vector<std::thread> writers;
+        writers.reserve(kWriters);
+        std::atomic<int> publishErrors{0};
+        for (int w = 0; w < kWriters; ++w)
+        {
+            writers.emplace_back([&, w]
+            {
+                for (int s = 0; s < kPublishesPer; ++s)
+                {
+                    const uint8_t payload[3] = {
+                        static_cast<uint8_t>(w),
+                        static_cast<uint8_t>(s & 0xFF),
+                        static_cast<uint8_t>((s >> 8) & 0xFF),
+                    };
+                    if (!transport.publishRaw("unit/concurrent", payload, sizeof(payload)))
+                    {
+                        publishErrors.fetch_add(1);
+                    }
+                }
+            });
+        }
+        for (auto& t : writers) t.join();
+
+        require(publishErrors.load() == 0,
+                "concurrent publishRaw must never return false under memq://");
+
+        // memq:// delivers synchronously, but spinning drains any callback
+        // dispatch backlog from the LCM C side.
+        spinTransport(transport, 4096);
+
+        std::lock_guard<std::mutex> lock(receivedMutex);
+        require(static_cast<int>(received.size()) == kExpectedTotal,
+                "expected " + std::to_string(kExpectedTotal) +
+                    " messages, got " + std::to_string(received.size()));
+
+        // Build the (writer, seq) set and verify each unique pair appears
+        // exactly once. Any duplicate or missing pair would expose a race.
+        std::set<std::pair<int, int>> seen;
+        for (const auto& msg : received)
+        {
+            require(msg.size() == 3, "every payload must be 3 bytes wide");
+            const int writer = msg[0];
+            const int seq    = static_cast<int>(msg[1]) | (static_cast<int>(msg[2]) << 8);
+            const auto inserted = seen.insert({writer, seq});
+            require(inserted.second,
+                    "duplicate (writer=" + std::to_string(writer) +
+                        ", seq=" + std::to_string(seq) + ") indicates a race");
+        }
+        require(static_cast<int>(seen.size()) == kExpectedTotal,
+                "deduplicated set size mismatch");
+    }
+
+    void testHeartbeatStaysOnTimeWhileWritersFlood()
+    {
+        // Models the production layout: one daemon publishing at a fixed
+        // 100 ms cadence ("heartbeat") plus N writers spamming unrelated
+        // channels in parallel. Counts how many heartbeats land in 500 ms.
+        // Without the mutex, the heartbeat publish could be interleaved with
+        // a flood publish and silently fail. With the mutex it serializes
+        // cleanly and the heartbeat count stays in the 4-6 window.
+        constexpr int kFlooders     = 4;
+        constexpr auto kRunDuration = std::chrono::milliseconds(550);
+
+        auto transport = raccoon::Transport::create("memq://");
+
+        std::atomic<int> heartbeatsSent{0};
+        std::atomic<int> heartbeatsReceived{0};
+        require(transport.subscribeRaw("unit/hb",
+            [&](const void*, int)
+            {
+                heartbeatsReceived.fetch_add(1);
+            }), "subscribe hb failed");
+
+        std::atomic<bool> stop{false};
+
+        std::thread heartbeat([&]
+        {
+            const uint8_t payload[1] = {0xBE};
+            while (!stop.load())
+            {
+                if (transport.publishRaw("unit/hb", payload, sizeof(payload)))
+                {
+                    heartbeatsSent.fetch_add(1);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        });
+
+        std::vector<std::thread> flooders;
+        flooders.reserve(kFlooders);
+        for (int w = 0; w < kFlooders; ++w)
+        {
+            flooders.emplace_back([&, w]
+            {
+                const uint8_t payload[2] = {static_cast<uint8_t>(w), 0xFF};
+                while (!stop.load())
+                {
+                    transport.publishRaw("unit/flood", payload, sizeof(payload));
+                }
+            });
+        }
+
+        std::this_thread::sleep_for(kRunDuration);
+        stop.store(true);
+        heartbeat.join();
+        for (auto& t : flooders) t.join();
+
+        spinTransport(transport, 8192);
+
+        const int sent = heartbeatsSent.load();
+        const int got  = heartbeatsReceived.load();
+        require(sent >= 4,
+                "heartbeat thread should have fired >=4 times, got " + std::to_string(sent));
+        require(got >= sent - 1,
+                "subscriber should have observed every published heartbeat; sent=" +
+                    std::to_string(sent) + " got=" + std::to_string(got));
+    }
+
+    void testSubscriberCallbackCanPublishBack()
+    {
+        // The api mutex is recursive: a subscriber callback that turns
+        // around and publishes (ack/echo pattern) must not self-deadlock.
+        // A non-recursive mutex would lock the test thread forever.
+        auto transport = raccoon::Transport::create("memq://");
+
+        std::atomic<int> echoes{0};
+        require(transport.subscribeRaw("unit/recurse",
+            [&](const void*, int)
+            {
+                const uint8_t ack[1] = {0xAC};
+                transport.publishRaw("unit/recurse-ack", ack, sizeof(ack));
+                echoes.fetch_add(1);
+            }), "subscribe recurse failed");
+
+        std::atomic<int> acks{0};
+        require(transport.subscribeRaw("unit/recurse-ack",
+            [&](const void*, int) { acks.fetch_add(1); }), "subscribe ack failed");
+
+        const uint8_t payload[1] = {0x42};
+        require(transport.publishRaw("unit/recurse", payload, sizeof(payload)),
+                "publish recurse failed");
+
+        spinTransport(transport, 32);
+
+        require(echoes.load() == 1, "subscriber callback should have fired exactly once");
+        require(acks.load() == 1,
+                "callback's nested publish should reach its own subscriber");
+    }
+}  // namespace
 
 int main()
 {
@@ -465,6 +648,9 @@ int main()
         {"reliable publisher stops retrying after matching ACK", testReliablePublisherStopsRetryingAfterMatchingAck},
         {"reliable publisher retries exactly until maxRetries", testReliablePublisherRetriesExactlyUntilMaxRetries},
         {"typed subscription records and resets latency stats", testTypedSubscriptionRecordsAndResetsLatencyStats},
+        {"concurrent publishers do not corrupt messages", testConcurrentPublishersDoNotCorruptMessages},
+        {"heartbeat stays on time while writers flood", testHeartbeatStaysOnTimeWhileWritersFlood},
+        {"subscriber callback can publish back (recursive)", testSubscriberCallbackCanPublishBack},
     };
 
     for (const auto& [name, test] : tests)

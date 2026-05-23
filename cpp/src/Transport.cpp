@@ -59,6 +59,19 @@ namespace raccoon
         // Deduplication cache
         std::unordered_map<std::string, std::vector<uint8_t>> deduplicationCache;
 
+        // Serializes every call into the LCM API. lcm::LCM is documented as
+        // single-threaded — concurrent publish from N writers (heartbeat
+        // daemon + motor commands + servo commands + ...) without this guard
+        // can corrupt the UDP send buffer, miss messages, or trip the
+        // hardware watchdog because heartbeat publishes get dropped.
+        //
+        // Recursive so a subscriber callback that publishes back (a common
+        // pattern for ack/handshake protocols) does not self-deadlock.
+        // ``spinOnce``/``spin`` also take this lock, so subscriber callbacks
+        // are dispatched with the mutex held — that's intentional: any
+        // re-entry must go through the recursive path.
+        std::recursive_mutex apiMutex;
+
         // Latency stats
         std::mutex statsMutex;
         int64_t latencyMinUs{std::numeric_limits<int64_t>::max()};
@@ -137,13 +150,15 @@ namespace raccoon
     {
         if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return false;
 
+        std::lock_guard<std::recursive_mutex> lock(impl_->apiMutex);
+
         if (options.deduplicate)
         {
             auto& cached = impl_->deduplicationCache[channel];
             if (cached.size() == static_cast<size_t>(dataLen) &&
                 std::memcmp(cached.data(), data, dataLen) == 0)
             {
-                std::lock_guard<std::mutex> lock(impl_->statsMutex);
+                std::lock_guard<std::mutex> statsLock(impl_->statsMutex);
                 ++impl_->publishesDeduplicated;
                 return true;
             }
@@ -176,6 +191,8 @@ namespace raccoon
                                  const SubscribeOptions& options)
     {
         if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return false;
+
+        std::lock_guard<std::recursive_mutex> lock(impl_->apiMutex);
 
         if (options.reliable)
         {
@@ -248,6 +265,7 @@ namespace raccoon
     int Transport::spinOnce(int timeoutMs)
     {
         if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return -1;
+        std::lock_guard<std::recursive_mutex> lock(impl_->apiMutex);
         int result = impl_->lcm->handleTimeout(timeoutMs);
         impl_->reliablePublisher.tick(impl_->lcm->getUnderlyingLCM());
         return result;
@@ -257,10 +275,16 @@ namespace raccoon
     {
         if (!impl_ || !impl_->lcm || !impl_->lcm->good()) return;
         impl_->running = true;
+        // Each iteration grabs+releases the lock so a long-running spin does
+        // not block concurrent publishers indefinitely. The 10 ms slice keeps
+        // worst-case publish latency low enough for a 100 ms heartbeat.
         while (impl_->running)
         {
-            impl_->lcm->handleTimeout(100);
-            impl_->reliablePublisher.tick(impl_->lcm->getUnderlyingLCM());
+            {
+                std::lock_guard<std::recursive_mutex> lock(impl_->apiMutex);
+                impl_->lcm->handleTimeout(10);
+                impl_->reliablePublisher.tick(impl_->lcm->getUnderlyingLCM());
+            }
         }
     }
 
