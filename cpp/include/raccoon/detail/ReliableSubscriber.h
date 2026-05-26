@@ -19,7 +19,11 @@ namespace raccoon::detail
 
         explicit ReliableSubscriber(std::string instanceId);
 
-        void subscribe(lcm_t* lcm, const std::string& channel, RawHandler handler);
+        void subscribe(
+            lcm_t* lcm,
+            const std::string& channel,
+            RawHandler handler,
+            std::recursive_mutex* apiMutex);
 
     private:
         struct Subscription
@@ -27,6 +31,7 @@ namespace raccoon::detail
             std::string channel;
             RawHandler handler;
             ReliableSubscriber* self;
+            std::recursive_mutex* apiMutex{nullptr};
         };
 
         static void onEnvelope(const lcm_recv_buf_t* rbuf,

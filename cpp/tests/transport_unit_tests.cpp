@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <mutex>
 #include <set>
@@ -634,6 +635,57 @@ namespace
         require(acks.load() == 1,
                 "callback's nested publish should reach its own subscriber");
     }
+
+    void testSlowSubscriberCallbackDoesNotBlockConcurrentSubscribe()
+    {
+        auto transport = raccoon::Transport::create("memq://");
+
+        std::atomic<bool> callbackEntered{false};
+        std::atomic<bool> releaseCallback{false};
+        std::atomic<bool> secondSubscribeInstalled{false};
+
+        require(transport.subscribeRaw("unit/slow",
+            [&](const void*, int)
+            {
+                callbackEntered.store(true);
+                while (!releaseCallback.load())
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }), "subscribe slow failed");
+
+        std::thread spinner([&] { transport.spin(); });
+
+        const uint8_t payload[1] = {0x42};
+        require(transport.publishRaw("unit/slow", payload, sizeof(payload)),
+                "publish slow failed");
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+        while (!callbackEntered.load() && std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        require(callbackEntered.load(), "slow callback should have started");
+
+        auto subscribeFuture = std::async(std::launch::async, [&]
+        {
+            bool ok = transport.subscribeRaw("unit/late",
+                [&](const void*, int) {}, raccoon::SubscribeOptions{});
+            secondSubscribeInstalled.store(ok);
+            return ok;
+        });
+
+        auto futureStatus = subscribeFuture.wait_for(std::chrono::milliseconds(50));
+        releaseCallback.store(true);
+
+        transport.stop();
+        spinner.join();
+
+        require(futureStatus == std::future_status::ready,
+                "concurrent subscribe should not wait for a slow callback to finish");
+        require(subscribeFuture.get(), "late subscribe should succeed");
+        require(secondSubscribeInstalled.load(), "late subscribe should be installed");
+    }
 }  // namespace
 
 int main()
@@ -651,6 +703,7 @@ int main()
         {"concurrent publishers do not corrupt messages", testConcurrentPublishersDoNotCorruptMessages},
         {"heartbeat stays on time while writers flood", testHeartbeatStaysOnTimeWhileWritersFlood},
         {"subscriber callback can publish back (recursive)", testSubscriberCallbackCanPublishBack},
+        {"slow subscriber callback does not block concurrent subscribe", testSlowSubscriberCallbackDoesNotBlockConcurrentSubscribe},
     };
 
     for (const auto& [name, test] : tests)

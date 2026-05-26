@@ -21,12 +21,29 @@ namespace raccoon
     struct RawSubscription
     {
         Transport::RawHandler handler;
+        std::recursive_mutex* apiMutex{nullptr};
     };
 
     static void rawSubscribeCallback(const lcm_recv_buf_t* rbuf, const char*,
                                      void* userdata)
     {
         auto* sub = static_cast<RawSubscription*>(userdata);
+        if (sub->apiMutex != nullptr)
+        {
+            sub->apiMutex->unlock();
+            try
+            {
+                sub->handler(rbuf->data, static_cast<int>(rbuf->data_size));
+            }
+            catch (...)
+            {
+                sub->apiMutex->lock();
+                throw;
+            }
+            sub->apiMutex->lock();
+            return;
+        }
+
         sub->handler(rbuf->data, static_cast<int>(rbuf->data_size));
     }
 
@@ -197,7 +214,10 @@ namespace raccoon
         if (options.reliable)
         {
             impl_->reliableSubscriber.subscribe(
-                impl_->lcm->getUnderlyingLCM(), channel, std::move(handler));
+                impl_->lcm->getUnderlyingLCM(),
+                channel,
+                std::move(handler),
+                &impl_->apiMutex);
 
             if (options.requestRetained)
             {
@@ -223,6 +243,7 @@ namespace raccoon
 
         auto sub = std::make_unique<RawSubscription>();
         sub->handler = std::move(handler);
+        sub->apiMutex = &impl_->apiMutex;
         auto* subPtr = sub.get();
         impl_->subscriptions.push_back(std::move(sub));
 

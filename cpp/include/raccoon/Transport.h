@@ -40,8 +40,10 @@ namespace raccoon
      * (writers serialize, they don't race). `spin()` releases the mutex
      * between iterations so concurrent publishers see at most ~10 ms of
      * scheduling delay even when a reader thread is active on the same
-     * Transport. Subscriber callbacks are dispatched with the mutex held;
-     * a callback that publishes back works because the lock is recursive.
+     * Transport. Subscriber callbacks temporarily release the mutex while
+     * user code runs, then reacquire it before returning to LCM. That keeps
+     * nested publish-in-callback patterns working while preventing a slow
+     * callback from blocking unrelated transport operations on other threads.
      */
     class Transport
     {

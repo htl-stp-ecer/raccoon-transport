@@ -11,13 +11,17 @@ namespace raccoon::detail
     {
     }
 
-    void ReliableSubscriber::subscribe(lcm_t* lcm, const std::string& channel,
-                                        RawHandler handler)
+    void ReliableSubscriber::subscribe(
+        lcm_t* lcm,
+        const std::string& channel,
+        RawHandler handler,
+        std::recursive_mutex* apiMutex)
     {
         auto sub = std::make_unique<Subscription>();
         sub->channel = channel;
         sub->handler = std::move(handler);
         sub->self = this;
+        sub->apiMutex = apiMutex;
 
         auto reliableChannel = Channels::Protocol::reliableChannel(channel);
         lcm_subscribe(lcm, reliableChannel.c_str(), onEnvelope, sub.get());
@@ -58,7 +62,24 @@ namespace raccoon::detail
         if (self->isDuplicate(env.publisher_id, env.seq_num))
             return;
 
-        // Deliver inner payload
+        // User handlers run outside the transport API mutex so a slow callback
+        // cannot block unrelated publish/subscribe calls from other threads.
+        if (sub->apiMutex != nullptr)
+        {
+            sub->apiMutex->unlock();
+            try
+            {
+                sub->handler(env.payload.data(), env.payload_size);
+            }
+            catch (...)
+            {
+                sub->apiMutex->lock();
+                throw;
+            }
+            sub->apiMutex->lock();
+            return;
+        }
+
         sub->handler(env.payload.data(), env.payload_size);
     }
 
