@@ -11,32 +11,32 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            glib-2.0-dev
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
 
       # ── C++ ──────────────────────────────────────────────
       - name: Build C++ library and interop tools
         run: |
           rm -rf build && mkdir build && cd build
-          if [[ "$(uname -s)" == "Darwin" ]]; then
-            arch -arm64 cmake -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_APPLE_SILICON_PROCESSOR=arm64 ..
-            arch -arm64 cmake --build . -j"$(sysctl -n hw.ncpu)"
-          else
-            cmake ..
-            cmake --build . -j$(nproc)
-          fi
+          cmake ..
+          cmake --build . -j$(nproc)
 
       - name: Run C++ unit tests
-        run: |
-          if [[ "$(uname -s)" == "Darwin" ]]; then
-            arch -arm64 ctest --test-dir build --output-on-failure
-          else
-            ctest --test-dir build --output-on-failure
-          fi
+        run: ctest --test-dir build --output-on-failure
 
       # ── Dart ─────────────────────────────────────────────
       - name: Dart pub get
@@ -57,42 +57,22 @@ jobs:
 
       # ── Python ───────────────────────────────────────────
       - name: Install Python package
-        run: |
-          if [[ "$(uname -s)" == "Darwin" ]]; then
-            arch -arm64 python3 -m pip install --break-system-packages -e python/ pytest
-          else
-            python3 -m pip install --break-system-packages -e python/ pytest
-          fi
+        run: pip3 install -e python/ pytest
 
       - name: Verify Python imports
-        run: |
-          if [[ "$(uname -s)" == "Darwin" ]]; then
-            arch -arm64 python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
-          else
-            python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
-          fi
+        run: python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
 
       - name: Python unit tests
-        run: |
-          if [[ "$(uname -s)" == "Darwin" ]]; then
-            arch -arm64 python3 -m pytest python/tests/ -v
-          else
-            python3 -m pytest python/tests/ -v
-          fi
+        run: python3 -m pytest python/tests/ -v
 
       # ── Integration tests ────────────────────────────────
       - name: Run integration tests
-        run: |
-          if [[ "$(uname -s)" == "Darwin" ]]; then
-            PYTHONPATH=. arch -arm64 python3 -m pytest integration_tests/ -v
-          else
-            PYTHONPATH=. python3 -m pytest integration_tests/ -v
-          fi
+        run: PYTHONPATH=. python3 -m pytest integration_tests/ -v
 
   build-and-release:
     needs: build-and-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     defaults:
@@ -100,7 +80,7 @@ jobs:
         shell: bash --noprofile --norc -eo pipefail {0}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Patch version
         run: |
@@ -108,7 +88,7 @@ jobs:
 
       - name: Build wheel
         run: |
-          pip3 install --break-system-packages build
+          pip3 install build
           rm -rf python/dist
           cd python && python3 -m build --wheel
 
