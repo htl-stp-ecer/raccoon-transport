@@ -23,7 +23,7 @@ namespace raccoon::detail
             lcm_t* lcm,
             const std::string& channel,
             RawHandler handler,
-            std::recursive_mutex* apiMutex);
+            std::recursive_mutex* apiMutex = nullptr);
 
     private:
         struct Subscription
