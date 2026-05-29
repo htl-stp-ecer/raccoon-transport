@@ -514,6 +514,28 @@ namespace raccoon
         //   2. Drop apiMutex.
         //   3. Dispatch the snapshot lock-free.
         const auto deadline = started + std::chrono::milliseconds(std::max(0, timeoutMs));
+
+        // Adaptive backoff between empty polls.
+        //
+        // The previous fixed 200 µs sleep produced ~5000 poll cycles/sec ×
+        // N subscribers iceoryx2-receive() calls — on a Pi 3B with ~40
+        // channels that pinned a core at 100 % even when no message was
+        // flowing. iox2 lacks a blocking receive in pub/sub mode (without
+        // a paired event service), so we cannot fully eliminate polling,
+        // but we can collapse the idle cost by ramping the sleep up to
+        // a multi-millisecond bound after consecutive empty iterations.
+        //
+        // When a poll dispatches at least one message we reset to the fast
+        // poll (200 µs) so back-to-back arrivals still see sub-ms latency.
+        // After kFastIterations empty polls we step up to a slow poll
+        // (kSlowSleepUs) — the typical Pi steady-state during a mission
+        // (sensor streams: 25-80 Hz). The deadline-bounded outer loop is
+        // unchanged, so callers still get the timeoutMs they asked for.
+        constexpr auto kFastSleep = std::chrono::microseconds(200);
+        constexpr auto kSlowSleep = std::chrono::microseconds(2000);
+        constexpr int kFastIterations = 4;
+        int emptyIterations = 0;
+
         do
         {
             // Per-iteration drained samples. We memcpy the payload out of
@@ -560,7 +582,17 @@ namespace raccoon
                 ++dispatched;
             }
             if (timeoutMs == 0) break;
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+
+            if (pending.empty())
+            {
+                ++emptyIterations;
+            }
+            else
+            {
+                emptyIterations = 0;
+            }
+            std::this_thread::sleep_for(
+                emptyIterations < kFastIterations ? kFastSleep : kSlowSleep);
         }
         while (std::chrono::steady_clock::now() < deadline);
         recordSpin(dispatched, std::chrono::duration_cast<std::chrono::microseconds>(
