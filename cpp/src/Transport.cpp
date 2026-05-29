@@ -264,6 +264,40 @@ namespace raccoon
         {
             // iceoryx2 does not have a "provider URL" concept; the parameter
             // is kept for API compatibility with the old LCM signature.
+            //
+            // Proactive cleanup pass BEFORE NodeBuilder::create. iox2
+            // *already* runs cleanup_dead_nodes_on_creation = true by
+            // default, but that path only scrubs nodes it can detect
+            // during the create call itself; persistent corruption from
+            // a prior boot can leave orphaned service descriptors that
+            // the create-time cleanup misses. Calling
+            // blocking_cleanup_dead_nodes here gives iox2 an explicit
+            // 2 s window to reap them before we open anything new.
+            // We log only when cleanup actually did something so a
+            // clean boot stays quiet.
+            try
+            {
+                auto cleanup = iox2::Node<iox2::ServiceType::Ipc>::
+                    blocking_cleanup_dead_nodes(
+                        iox2::Config::global_config(),
+                        iox2::bb::Duration::from_secs(2));
+                if (cleanup.cleanups > 0 || cleanup.failed_cleanups > 0)
+                {
+                    std::cerr << "raccoon::Transport: iceoryx2 dead-node "
+                              << "cleanup at startup: "
+                              << cleanup.cleanups << " reaped, "
+                              << cleanup.failed_cleanups << " skipped\n";
+                }
+            }
+            catch (const std::exception& e)
+            {
+                // Swallow — cleanup is best-effort. NodeBuilder below
+                // will still try, and our retry budget covers what
+                // cleanup couldn't.
+                std::cerr << "raccoon::Transport: dead-node cleanup raised: "
+                          << e.what() << " — continuing\n";
+            }
+
             // Node creation can fail (corrupted iox2 state, permissions,
             // exceeded max nodes, …). On failure we leave `node` null and
             // every Transport entry-point short-circuits to a clean error
