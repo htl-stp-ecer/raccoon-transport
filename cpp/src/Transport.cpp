@@ -65,6 +65,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -99,11 +100,38 @@ namespace raccoon
     }
 
     // iceoryx2 service names share LCM's channel naming (slash-separated).
-    // Empty names and control characters are rejected by iceoryx2; we let
-    // those propagate as failed-publish so the caller sees the bad name.
-    static iox2::ServiceName makeServiceName(const std::string& channel)
+    // Empty names and control characters are rejected by iceoryx2; on
+    // failure we return nullopt so the caller can refuse the publish/
+    // subscribe instead of aborting via a panicking .value() unwrap.
+    static auto tryMakeServiceName(const std::string& channel)
+        -> std::optional<iox2::ServiceName>
     {
-        return iox2::ServiceName::create(channel.c_str()).value();
+        auto result = iox2::ServiceName::create(channel.c_str());
+        if (!result.has_value()) return std::nullopt;
+        return std::optional<iox2::ServiceName>{std::move(result.value())};
+    }
+
+    // Retry policy for transient iox2 open_or_create errors. Per the iox2
+    // docs both `IsMarkedForDestruction` and `IsBeingCreatedByAnotherInstance`
+    // are explicitly described as resolvable by repeating the call after
+    // a short delay. Apply uniformly to every open_or_create / build site
+    // so any transient cleanup race in a multi-tenant deployment does NOT
+    // turn into a process abort — the call either eventually succeeds or
+    // the caller gets a clean failure to report.
+    static constexpr int kIoxRetryAttempts = 6;
+    static constexpr std::chrono::milliseconds kIoxRetryDelay{15};
+
+    template <typename F>
+    static auto retryIox(F&& fn)
+    {
+        decltype(fn()) last = fn();
+        for (int attempt = 1; attempt < kIoxRetryAttempts; ++attempt)
+        {
+            if (last.has_value()) return last;
+            std::this_thread::sleep_for(kIoxRetryDelay);
+            last = fn();
+        }
+        return last;
     }
 
     class Transport::Impl
@@ -176,25 +204,48 @@ namespace raccoon
         {
             // iceoryx2 does not have a "provider URL" concept; the parameter
             // is kept for API compatibility with the old LCM signature.
-            node = std::make_unique<IoxNode>(
-                iox2::NodeBuilder().create<iox2::ServiceType::Ipc>()
-                    .value());
+            // Node creation can fail (corrupted iox2 state, permissions,
+            // exceeded max nodes, …). On failure we leave `node` null and
+            // every Transport entry-point short-circuits to a clean error
+            // instead of aborting the whole process.
+            auto built = retryIox([]() {
+                return iox2::NodeBuilder().create<iox2::ServiceType::Ipc>();
+            });
+            if (!built.has_value())
+            {
+                std::cerr << "raccoon::Transport: NodeBuilder::create failed "
+                             "after retries — Transport will refuse all calls\n";
+                return;
+            }
+            node = std::make_unique<IoxNode>(std::move(built.value()));
         }
 
         bool initialize() const { return node != nullptr; }
 
         // Get-or-create a publisher port for the given channel. Returns
-        // nullptr on failure (e.g. invalid channel name). All calls into
-        // iceoryx2 must hold apiMutex.
+        // nullptr on failure (invalid channel name, iox2 service open
+        // refused after retries, …). All calls into iceoryx2 must hold
+        // apiMutex. NEVER aborts the process — every iox2 Expected is
+        // checked, transient errors get retried via `retryIox`.
         IoxPublisher* publisherFor(const std::string& channel,
                                    [[maybe_unused]] bool retained)
         {
             auto it = publishers.find(channel);
             if (it != publishers.end()) return it->second.publisher.get();
 
-            PubEntry entry{};
-            entry.service = std::make_unique<IoxService>(
-                node->service_builder(makeServiceName(channel))
+            auto svcName = tryMakeServiceName(channel);
+            if (!svcName)
+            {
+                std::cerr << "raccoon::Transport: invalid channel name '"
+                          << channel << "' (rejected by iceoryx2)\n";
+                return nullptr;
+            }
+
+            // Open or create the pub/sub service. Retries cover the
+            // OpenIsMarkedForDestruction / IsBeingCreatedByAnotherInstance
+            // transients that fire during multi-tenant cleanup races.
+            auto svcResult = retryIox([&]() {
+                return node->service_builder(*svcName)
                     .publish_subscribe<IoxPayload>()
                     .max_publishers(8)
                     .max_subscribers(16)
@@ -205,18 +256,38 @@ namespace raccoon
                     // requested minimum is greater than the live history.
                     .history_size(1)
                     .subscriber_max_buffer_size(64)
-                    .open_or_create()
-                    .value());
-            entry.publisher = std::make_unique<IoxPublisher>(
-                entry.service->publisher_builder()
-                    // Hint for the SHM allocator. Common case (scalar/vector
-                    // LCM-encoded messages) fits without reallocation; larger
-                    // payloads (cam_frame_t, screen_render_t) trigger
-                    // PowerOfTwo growth to 8K → 16K → … as needed.
+                    .open_or_create();
+            });
+            if (!svcResult.has_value())
+            {
+                std::cerr << "raccoon::Transport: publisher open_or_create('"
+                          << channel << "') failed after retries\n";
+                return nullptr;
+            }
+
+            PubEntry entry{};
+            entry.service = std::make_unique<IoxService>(
+                std::move(svcResult.value()));
+
+            // Hint for the SHM allocator. Common case (scalar/vector
+            // LCM-encoded messages) fits without reallocation; larger
+            // payloads (cam_frame_t, screen_render_t) trigger
+            // PowerOfTwo growth to 8K → 16K → … as needed.
+            auto pubResult = retryIox([&]() {
+                return entry.service->publisher_builder()
                     .initial_max_slice_len(kInitialSliceHint)
                     .allocation_strategy(iox2::AllocationStrategy::PowerOfTwo)
-                    .create()
-                    .value());
+                    .create();
+            });
+            if (!pubResult.has_value())
+            {
+                std::cerr << "raccoon::Transport: publisher_builder('"
+                          << channel << "') failed after retries\n";
+                return nullptr;
+            }
+            entry.publisher = std::make_unique<IoxPublisher>(
+                std::move(pubResult.value()));
+
             auto* raw = entry.publisher.get();
             publishers.emplace(channel, std::move(entry));
             return raw;
@@ -224,30 +295,60 @@ namespace raccoon
 
         // Get-or-create a subscriber entry for the channel. Multiple
         // subscribe() calls on the same channel share one iceoryx2 port and
-        // fan out callbacks at dispatch time.
+        // fan out callbacks at dispatch time. Returns nullptr on a clean
+        // failure (invalid name, iox2 open refused after retries) — NEVER
+        // aborts the process.
         SubEntry* subscriberFor(const std::string& channel, bool requestRetained)
         {
             for (auto& s : subscribers)
             {
                 if (s->channel == channel) return s.get();
             }
-            auto entry = std::make_unique<SubEntry>();
-            entry->channel = channel;
-            entry->retained = requestRetained;
-            entry->service = std::make_unique<IoxService>(
-                node->service_builder(makeServiceName(channel))
+
+            auto svcName = tryMakeServiceName(channel);
+            if (!svcName)
+            {
+                std::cerr << "raccoon::Transport: invalid channel name '"
+                          << channel << "' (rejected by iceoryx2)\n";
+                return nullptr;
+            }
+
+            auto svcResult = retryIox([&]() {
+                return node->service_builder(*svcName)
                     .publish_subscribe<IoxPayload>()
                     .max_publishers(8)
                     .max_subscribers(16)
                     .history_size(1)
                     .subscriber_max_buffer_size(64)
-                    .open_or_create()
-                    .value());
-            entry->subscriber = std::make_unique<IoxSubscriber>(
-                entry->service->subscriber_builder()
+                    .open_or_create();
+            });
+            if (!svcResult.has_value())
+            {
+                std::cerr << "raccoon::Transport: subscriber open_or_create('"
+                          << channel << "') failed after retries\n";
+                return nullptr;
+            }
+
+            auto entry = std::make_unique<SubEntry>();
+            entry->channel = channel;
+            entry->retained = requestRetained;
+            entry->service = std::make_unique<IoxService>(
+                std::move(svcResult.value()));
+
+            auto subResult = retryIox([&]() {
+                return entry->service->subscriber_builder()
                     .buffer_size(64)
-                    .create()
-                    .value());
+                    .create();
+            });
+            if (!subResult.has_value())
+            {
+                std::cerr << "raccoon::Transport: subscriber_builder('"
+                          << channel << "') failed after retries\n";
+                return nullptr;
+            }
+            entry->subscriber = std::make_unique<IoxSubscriber>(
+                std::move(subResult.value()));
+
             auto* raw = entry.get();
             subscribers.push_back(std::move(entry));
             return raw;
@@ -446,7 +547,12 @@ namespace raccoon
         // SHM pool transparently via PowerOfTwo when dataLen exceeds the
         // current pool's max slice; for the steady-state hot path the
         // initial 4 KB hint covers most messages without reallocation.
-        auto sample = pub->loan_slice_uninit(static_cast<uint64_t>(dataLen)).value();
+        //
+        // loan_slice_uninit can fail (publisher disconnected, allocation
+        // refused). Return false on failure instead of aborting via .value().
+        auto loaned = pub->loan_slice_uninit(static_cast<uint64_t>(dataLen));
+        if (!loaned.has_value()) return false;
+        auto sample = std::move(loaned.value());
         std::memcpy(sample.payload_mut().data(), data, static_cast<std::size_t>(dataLen));
         auto init = iox2::assume_init(std::move(sample));
         return iox2::send(std::move(init)).has_value();
@@ -560,7 +666,14 @@ namespace raccoon
                 std::lock_guard<std::recursive_mutex> lock(impl_->apiMutex);
                 for (auto& sub : impl_->subscribers)
                 {
-                    auto sample = sub->subscriber->receive().value();
+                    if (!sub->subscriber) continue;
+                    // receive() returns Expected<Optional<Sample>, Error>.
+                    // On error we skip this subscriber for this cycle —
+                    // the next spinOnce will try again. Never abort via
+                    // .value() on a failed Expected.
+                    auto recv = sub->subscriber->receive();
+                    if (!recv.has_value()) continue;
+                    auto sample = std::move(recv.value());
                     if (!sample.has_value()) continue;
                     const auto& slice = sample->payload();
                     const auto n = slice.number_of_bytes();
