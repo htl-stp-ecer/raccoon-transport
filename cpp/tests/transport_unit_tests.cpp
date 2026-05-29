@@ -308,7 +308,8 @@ namespace
                 ++deliveries;
                 const auto* bytes = static_cast<const uint8_t*>(data);
                 deliveredPayload.assign(bytes, bytes + len);
-            });
+            },
+                             nullptr);
 
         SpySubscription ackSpy;
         lcm_subscribe(lcm.get(), raccoon::Channels::Protocol::ACK, spyCallback, &ackSpy);
@@ -446,15 +447,28 @@ namespace
 
         auto stats = transport.getAndResetStats();
         require(stats.latency.count == 1, "typed delivery should record one latency sample");
+        require(stats.callback.count == 1, "typed delivery should record one callback timing sample");
+        require(stats.spin.count > 0, "spinning should record spin timing samples");
         require(stats.latency.minUs > 0, "latency minimum should be positive for a past timestamp");
         require(stats.latency.maxUs >= stats.latency.minUs, "latency max should be at least latency min");
         require(stats.latency.avgUs >= stats.latency.minUs, "latency avg should be at least latency min");
+        require(!stats.channels.empty(), "per-channel stats should contain the subscribed channel");
+        require(stats.channels.front().name == "unit/typed",
+                "per-channel stats should report the typed channel name");
+        require(stats.channels.front().deliveries == 1,
+                "per-channel stats should report exactly one delivery");
+        require(stats.channels.front().latency.count == 1,
+                "per-channel stats should include one latency sample");
+        require(stats.channels.front().callback.count == 1,
+                "per-channel stats should include one callback sample");
 
         auto reset = transport.getAndResetStats();
         require(reset.latency.count == 0, "latency stats should reset after retrieval");
+        require(reset.callback.count == 0, "callback stats should reset after retrieval");
         require(reset.latency.minUs == 0, "reset latency min should be zeroed");
         require(reset.latency.maxUs == 0, "reset latency max should be zeroed");
         require(reset.latency.avgUs == 0, "reset latency avg should be zeroed");
+        require(reset.channels.empty(), "per-channel stats should reset after retrieval");
     }
 
     void testConcurrentPublishersDoNotCorruptMessages()
