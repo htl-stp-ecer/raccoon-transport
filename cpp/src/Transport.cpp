@@ -116,21 +116,22 @@ namespace raccoon
     // iox2 docs name three specific failure classes as "retry-after-a-delay":
     //   * OpenIsMarkedForDestruction        (mid-cleanup race)
     //   * IsBeingCreatedByAnotherInstance   (concurrent peer creating)
-    //   * OpenServiceInCorruptedState       (cleanup-after-reboot path)
+    //   * OpenServiceInCorruptedState       (post-reboot orphan cleanup)
     //
-    // The third one is the slow one — when a process died uncleanly and
-    // left `/tmp/iceoryx2/services/*.service` behind, the next iox2 node
-    // detects the orphan, calls `remove_node_from_service` to scrub it,
-    // and the cleanup is on the order of *seconds*, not ms. A short
-    // retry budget would turn that healing pass into a clean failure
-    // that the operator has to recover from manually.
+    // The third case is the slow one — each open_or_create() internally
+    // runs `Service::remove_node_from_service` against an orphan, which
+    // itself blocks for ~1-2 s. A pure attempt-count budget therefore
+    // blows past wall-clock expectations (we measured 25 s with 20
+    // attempts × 320 ms cap because iox2 was doing 1+ s of cleanup per
+    // call). Switch to a wall-clock budget so the operator sees a clean
+    // verdict in seconds, not half a minute.
     //
-    // Budget: ~3 s total via exponential backoff (20 ms → 320 ms cap),
-    // so the cheap transients are handled in tens of ms while the
-    // post-reboot corruption-cleanup case has time to complete without
-    // operator intervention. The first transient gets logged once so
-    // a slow startup is visible instead of looking like a hang.
-    static constexpr int kIoxRetryAttempts = 20;
+    // Budget: 5 s total. That gives the fast `IsMarkedForDestruction`
+    // race tens of ms to resolve, and lets the slow corruption path
+    // get 2-3 internal cleanup passes before we declare it stuck.
+    // Sleeps between attempts grow 20 ms → 320 ms so we don't busy-spin
+    // the cleanup; each attempt itself is iox2-bound.
+    static constexpr std::chrono::milliseconds kIoxRetryBudget{5000};
     static constexpr std::chrono::milliseconds kIoxRetryInitialDelay{20};
     static constexpr std::chrono::milliseconds kIoxRetryMaxDelay{320};
 
@@ -138,10 +139,11 @@ namespace raccoon
     static auto retryIox(F&& fn, const char* operation = nullptr)
     {
         const auto started = std::chrono::steady_clock::now();
+        const auto deadline = started + kIoxRetryBudget;
         auto delay = kIoxRetryInitialDelay;
         bool announcedTransient = false;
         auto last = fn();
-        for (int attempt = 1; attempt < kIoxRetryAttempts; ++attempt)
+        while (true)
         {
             if (last.has_value())
             {
@@ -154,11 +156,16 @@ namespace raccoon
                 }
                 return last;
             }
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                break;
+            }
             if (!announcedTransient && operation)
             {
                 std::cerr << "raccoon::Transport: " << operation
-                          << " hit a transient iceoryx2 error — retrying "
-                          << "(post-reboot cleanup can take a few seconds)\n";
+                          << " hit a transient iceoryx2 error — self-healing "
+                          << "(budget "
+                          << kIoxRetryBudget.count() << " ms)\n";
                 announcedTransient = true;
             }
             std::this_thread::sleep_for(delay);
@@ -170,16 +177,19 @@ namespace raccoon
             const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - started).count();
             std::cerr << "raccoon::Transport: " << operation
-                      << " did not recover after " << waited << " ms.\n"
-                      << "  This usually means another iox2 process is holding\n"
-                      << "  a corrupted service. Self-heal procedure:\n"
+                      << " did not self-heal after " << waited << " ms.\n"
+                      << "  iceoryx2 state on this host is stuck. Recovery:\n"
                       << "    sudo systemctl stop stm32_data_reader.service\n"
-                      << "    sudo pkill -f raccoon_cli.server\n"
+                      << "    sudo systemctl stop raccoon.service\n"
+                      << "    sudo pkill -9 -f \"python3 -m src.main\"\n"
                       << "    sudo rm -rf /tmp/iceoryx2 /dev/shm/iox2_*\n"
                       << "    sudo systemctl start stm32_data_reader.service\n"
-                      << "  and rerun. If this keeps happening on every boot,\n"
-                      << "  check that no service is launching as root\n"
-                      << "  (root-owned iox2 state blocks pi-user processes).\n";
+                      << "    sudo systemctl start raccoon.service\n"
+                      << "  If this keeps happening on every boot, check that\n"
+                      << "  no iceoryx2-using process is started as root —\n"
+                      << "  root-owned state under /tmp/iceoryx2 or /dev/shm\n"
+                      << "  blocks pi-user processes (drwxr-x--- root:root\n"
+                      << "  perms shut them out).\n";
         }
         return last;
     }
