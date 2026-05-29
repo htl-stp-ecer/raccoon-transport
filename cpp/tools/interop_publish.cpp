@@ -1,6 +1,12 @@
 #include "interop_common.h"
 #include <raccoon/Transport.h>
 
+// Interop tool: still accepts a `--reliable` flag for cross-language test
+// scripts that haven't been cleaned up yet. The iceoryx2 backend ignores it.
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <string>

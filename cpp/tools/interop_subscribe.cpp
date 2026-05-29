@@ -2,6 +2,11 @@
 #include <raccoon/Transport.h>
 #include <raccoon/Options.h>
 
+// See interop_publish.cpp — same rationale.
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include <chrono>
 #include <cstdint>
 #include <iomanip>

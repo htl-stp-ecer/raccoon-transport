@@ -19,11 +19,42 @@ namespace raccoon
             int64_t minUs = 0;
             int64_t maxUs = 0;
             int64_t avgUs = 0;
+            int64_t p99Us = 0;
             uint64_t count = 0;
         };
 
+        struct Callback
+        {
+            int64_t minUs = 0;
+            int64_t maxUs = 0;
+            int64_t avgUs = 0;
+            int64_t totalUs = 0;
+            uint64_t count = 0;
+        };
+
+        struct Spin
+        {
+            int64_t minUs = 0;
+            int64_t maxUs = 0;
+            int64_t avgUs = 0;
+            uint64_t count = 0;
+            uint64_t activeCount = 0;
+            uint64_t idleCount = 0;
+        };
+
+        struct Channel
+        {
+            std::string name;
+            uint64_t deliveries = 0;
+            Latency latency{};
+            Callback callback{};
+        };
+
         Latency latency{};
+        Callback callback{};
+        Spin spin{};
         uint64_t publishesDeduplicated = 0;
+        std::vector<Channel> channels{};
     };
 
     /**
@@ -97,14 +128,14 @@ namespace raccoon
                        std::function<void(const T &)> handler,
                        const SubscribeOptions& options = {})
         {
-            return subscribeRaw(channel, [this, handler](const void* data, int dataLen)
+            return subscribeRaw(channel, [this, channel, handler](const void* data, int dataLen)
             {
                 T msg;
                 if (msg.decode(data, 0, dataLen) >= 0)
                 {
                     auto nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
-                    recordLatency(nowUs - msg.timestamp);
+                    recordLatency(channel, nowUs - msg.timestamp);
                     handler(msg);
                 }
             }, options);
@@ -120,10 +151,29 @@ namespace raccoon
         /** Request termination of a running `spin()` loop. */
         void stop();
 
+        /**
+         * Tear down the iceoryx2 Node and all lazy publisher/subscriber
+         * ports NOW, while the host process and iceoryx2 globals are still
+         * alive. Required to avoid a static-destruction-order SIGSEGV: the
+         * default `~Transport()` runs during C++ static teardown and can
+         * race iceoryx2's own globals (LoggerManager, ConfigManager). Call
+         * this from a Python atexit hook or your app's controlled shutdown
+         * path. After this returns the Transport is no longer alive — see
+         * `is_alive()` — and subsequent publish/subscribe calls become
+         * safe no-ops. Re-instate by replacing it with another
+         * `Transport::create()` if you actually want to keep going.
+         */
+        void shutdown();
+
+        /** True once `create()` has succeeded and `shutdown()` has not run. */
+        [[nodiscard]] bool is_alive() const noexcept;
+
     private:
         class Impl;
         std::unique_ptr<Impl> impl_;
 
-        void recordLatency(int64_t us);
+        void recordLatency(const std::string& channel, int64_t us);
+        void recordCallback(const std::string& channel, int64_t us);
+        void recordSpin(int result, int64_t us);
     };
 }
