@@ -517,22 +517,26 @@ namespace raccoon
 
         // Adaptive backoff between empty polls.
         //
-        // The previous fixed 200 µs sleep produced ~5000 poll cycles/sec ×
-        // N subscribers iceoryx2-receive() calls — on a Pi 3B with ~40
-        // channels that pinned a core at 100 % even when no message was
-        // flowing. iox2 lacks a blocking receive in pub/sub mode (without
-        // a paired event service), so we cannot fully eliminate polling,
-        // but we can collapse the idle cost by ramping the sleep up to
-        // a multi-millisecond bound after consecutive empty iterations.
+        // Profiled on a Pi 3B (strace/py-spy native) during an active
+        // mission with the reader publishing IMU/BEMF at ~80 Hz: the
+        // spin thread did ~2000 clock_nanosleep/sec and burned 23 %
+        // CPU just calling iceoryx2 receive() on every subscribed
+        // channel (~40 of them after LcmReader's pre-subscribe pass).
+        // iox2 has no blocking receive in pub/sub mode (without a
+        // paired event service), so we cannot eliminate polling, but
+        // the previous 200 µs fast tick was 5–10× more aggressive
+        // than any consumer in raccoon-lib actually needs:
+        //   sensor consumers (IMU, BEMF, button)       : ≥ 50 Hz tolerable
+        //   motor mode_cmd round-trip                  : ≥ 100 Hz tolerable
+        //   asyncio mission step loop                  : 10 ms granularity
         //
-        // When a poll dispatches at least one message we reset to the fast
-        // poll (200 µs) so back-to-back arrivals still see sub-ms latency.
-        // After kFastIterations empty polls we step up to a slow poll
-        // (kSlowSleepUs) — the typical Pi steady-state during a mission
-        // (sensor streams: 25-80 Hz). The deadline-bounded outer loop is
-        // unchanged, so callers still get the timeoutMs they asked for.
-        constexpr auto kFastSleep = std::chrono::microseconds(200);
-        constexpr auto kSlowSleep = std::chrono::microseconds(2000);
+        // The 1 ms fast tick keeps active-traffic latency under one
+        // poll cycle (well below any control loop's budget) and the
+        // 10 ms idle tick collapses the cost when nothing's flowing.
+        // The deadline-bounded outer loop is unchanged, so callers
+        // still get the timeoutMs they asked for.
+        constexpr auto kFastSleep = std::chrono::milliseconds(1);
+        constexpr auto kSlowSleep = std::chrono::milliseconds(10);
         constexpr int kFastIterations = 4;
         int emptyIterations = 0;
 
