@@ -111,25 +111,75 @@ namespace raccoon
         return std::optional<iox2::ServiceName>{std::move(result.value())};
     }
 
-    // Retry policy for transient iox2 open_or_create errors. Per the iox2
-    // docs both `IsMarkedForDestruction` and `IsBeingCreatedByAnotherInstance`
-    // are explicitly described as resolvable by repeating the call after
-    // a short delay. Apply uniformly to every open_or_create / build site
-    // so any transient cleanup race in a multi-tenant deployment does NOT
-    // turn into a process abort — the call either eventually succeeds or
-    // the caller gets a clean failure to report.
-    static constexpr int kIoxRetryAttempts = 6;
-    static constexpr std::chrono::milliseconds kIoxRetryDelay{15};
+    // Retry policy for transient iox2 open_or_create errors.
+    //
+    // iox2 docs name three specific failure classes as "retry-after-a-delay":
+    //   * OpenIsMarkedForDestruction        (mid-cleanup race)
+    //   * IsBeingCreatedByAnotherInstance   (concurrent peer creating)
+    //   * OpenServiceInCorruptedState       (cleanup-after-reboot path)
+    //
+    // The third one is the slow one — when a process died uncleanly and
+    // left `/tmp/iceoryx2/services/*.service` behind, the next iox2 node
+    // detects the orphan, calls `remove_node_from_service` to scrub it,
+    // and the cleanup is on the order of *seconds*, not ms. A short
+    // retry budget would turn that healing pass into a clean failure
+    // that the operator has to recover from manually.
+    //
+    // Budget: ~3 s total via exponential backoff (20 ms → 320 ms cap),
+    // so the cheap transients are handled in tens of ms while the
+    // post-reboot corruption-cleanup case has time to complete without
+    // operator intervention. The first transient gets logged once so
+    // a slow startup is visible instead of looking like a hang.
+    static constexpr int kIoxRetryAttempts = 20;
+    static constexpr std::chrono::milliseconds kIoxRetryInitialDelay{20};
+    static constexpr std::chrono::milliseconds kIoxRetryMaxDelay{320};
 
     template <typename F>
-    static auto retryIox(F&& fn)
+    static auto retryIox(F&& fn, const char* operation = nullptr)
     {
-        decltype(fn()) last = fn();
+        const auto started = std::chrono::steady_clock::now();
+        auto delay = kIoxRetryInitialDelay;
+        bool announcedTransient = false;
+        auto last = fn();
         for (int attempt = 1; attempt < kIoxRetryAttempts; ++attempt)
         {
-            if (last.has_value()) return last;
-            std::this_thread::sleep_for(kIoxRetryDelay);
+            if (last.has_value())
+            {
+                if (announcedTransient && operation)
+                {
+                    const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started).count();
+                    std::cerr << "raccoon::Transport: " << operation
+                              << " recovered after " << waited << " ms\n";
+                }
+                return last;
+            }
+            if (!announcedTransient && operation)
+            {
+                std::cerr << "raccoon::Transport: " << operation
+                          << " hit a transient iceoryx2 error — retrying "
+                          << "(post-reboot cleanup can take a few seconds)\n";
+                announcedTransient = true;
+            }
+            std::this_thread::sleep_for(delay);
+            delay = std::min(delay * 2, kIoxRetryMaxDelay);
             last = fn();
+        }
+        if (!last.has_value() && operation)
+        {
+            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started).count();
+            std::cerr << "raccoon::Transport: " << operation
+                      << " did not recover after " << waited << " ms.\n"
+                      << "  This usually means another iox2 process is holding\n"
+                      << "  a corrupted service. Self-heal procedure:\n"
+                      << "    sudo systemctl stop stm32_data_reader.service\n"
+                      << "    sudo pkill -f raccoon_cli.server\n"
+                      << "    sudo rm -rf /tmp/iceoryx2 /dev/shm/iox2_*\n"
+                      << "    sudo systemctl start stm32_data_reader.service\n"
+                      << "  and rerun. If this keeps happening on every boot,\n"
+                      << "  check that no service is launching as root\n"
+                      << "  (root-owned iox2 state blocks pi-user processes).\n";
         }
         return last;
     }
@@ -208,9 +258,11 @@ namespace raccoon
             // exceeded max nodes, …). On failure we leave `node` null and
             // every Transport entry-point short-circuits to a clean error
             // instead of aborting the whole process.
-            auto built = retryIox([]() {
-                return iox2::NodeBuilder().create<iox2::ServiceType::Ipc>();
-            });
+            auto built = retryIox(
+                []() {
+                    return iox2::NodeBuilder().create<iox2::ServiceType::Ipc>();
+                },
+                "NodeBuilder::create");
             if (!built.has_value())
             {
                 std::cerr << "raccoon::Transport: NodeBuilder::create failed "
@@ -242,26 +294,30 @@ namespace raccoon
             }
 
             // Open or create the pub/sub service. Retries cover the
-            // OpenIsMarkedForDestruction / IsBeingCreatedByAnotherInstance
-            // transients that fire during multi-tenant cleanup races.
-            auto svcResult = retryIox([&]() {
-                return node->service_builder(*svcName)
-                    .publish_subscribe<IoxPayload>()
-                    .max_publishers(8)
-                    .max_subscribers(16)
-                    // Always 1: cheap retain, and crucially the SAME value
-                    // across every open_or_create() of a given service.
-                    // Otherwise the second caller hits
-                    // OpenDoesNotSupportRequestedMinHistorySize when its
-                    // requested minimum is greater than the live history.
-                    .history_size(1)
-                    .subscriber_max_buffer_size(64)
-                    .open_or_create();
-            });
+            // OpenIsMarkedForDestruction / IsBeingCreatedByAnotherInstance /
+            // OpenServiceInCorruptedState transients (the third is what
+            // fires on the post-reboot cleanup path).
+            const std::string svcLabel =
+                "publisher open_or_create('" + channel + "')";
+            auto svcResult = retryIox(
+                [&]() {
+                    return node->service_builder(*svcName)
+                        .publish_subscribe<IoxPayload>()
+                        .max_publishers(8)
+                        .max_subscribers(16)
+                        // Always 1: cheap retain, and crucially the SAME
+                        // value across every open_or_create() of a given
+                        // service. Otherwise the second caller hits
+                        // OpenDoesNotSupportRequestedMinHistorySize when
+                        // its requested minimum is greater than the live
+                        // history.
+                        .history_size(1)
+                        .subscriber_max_buffer_size(64)
+                        .open_or_create();
+                },
+                svcLabel.c_str());
             if (!svcResult.has_value())
             {
-                std::cerr << "raccoon::Transport: publisher open_or_create('"
-                          << channel << "') failed after retries\n";
                 return nullptr;
             }
 
@@ -273,16 +329,18 @@ namespace raccoon
             // LCM-encoded messages) fits without reallocation; larger
             // payloads (cam_frame_t, screen_render_t) trigger
             // PowerOfTwo growth to 8K → 16K → … as needed.
-            auto pubResult = retryIox([&]() {
-                return entry.service->publisher_builder()
-                    .initial_max_slice_len(kInitialSliceHint)
-                    .allocation_strategy(iox2::AllocationStrategy::PowerOfTwo)
-                    .create();
-            });
+            const std::string pubLabel =
+                "publisher_builder('" + channel + "')";
+            auto pubResult = retryIox(
+                [&]() {
+                    return entry.service->publisher_builder()
+                        .initial_max_slice_len(kInitialSliceHint)
+                        .allocation_strategy(iox2::AllocationStrategy::PowerOfTwo)
+                        .create();
+                },
+                pubLabel.c_str());
             if (!pubResult.has_value())
             {
-                std::cerr << "raccoon::Transport: publisher_builder('"
-                          << channel << "') failed after retries\n";
                 return nullptr;
             }
             entry.publisher = std::make_unique<IoxPublisher>(
@@ -313,19 +371,21 @@ namespace raccoon
                 return nullptr;
             }
 
-            auto svcResult = retryIox([&]() {
-                return node->service_builder(*svcName)
-                    .publish_subscribe<IoxPayload>()
-                    .max_publishers(8)
-                    .max_subscribers(16)
-                    .history_size(1)
-                    .subscriber_max_buffer_size(64)
-                    .open_or_create();
-            });
+            const std::string svcLabel =
+                "subscriber open_or_create('" + channel + "')";
+            auto svcResult = retryIox(
+                [&]() {
+                    return node->service_builder(*svcName)
+                        .publish_subscribe<IoxPayload>()
+                        .max_publishers(8)
+                        .max_subscribers(16)
+                        .history_size(1)
+                        .subscriber_max_buffer_size(64)
+                        .open_or_create();
+                },
+                svcLabel.c_str());
             if (!svcResult.has_value())
             {
-                std::cerr << "raccoon::Transport: subscriber open_or_create('"
-                          << channel << "') failed after retries\n";
                 return nullptr;
             }
 
@@ -335,15 +395,17 @@ namespace raccoon
             entry->service = std::make_unique<IoxService>(
                 std::move(svcResult.value()));
 
-            auto subResult = retryIox([&]() {
-                return entry->service->subscriber_builder()
-                    .buffer_size(64)
-                    .create();
-            });
+            const std::string subLabel =
+                "subscriber_builder('" + channel + "')";
+            auto subResult = retryIox(
+                [&]() {
+                    return entry->service->subscriber_builder()
+                        .buffer_size(64)
+                        .create();
+                },
+                subLabel.c_str());
             if (!subResult.has_value())
             {
-                std::cerr << "raccoon::Transport: subscriber_builder('"
-                          << channel << "') failed after retries\n";
                 return nullptr;
             }
             entry->subscriber = std::make_unique<IoxSubscriber>(
