@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     // sweet spot we measured on a Pi 3B: fast enough that a dead node
     // is gone before the next process's NodeBuilder runs, slow enough
     // that the binary's wakeups don't show up in `top`.
-    auto period = std::chrono::seconds(2);
+    std::chrono::milliseconds period{2000};
     if (argc >= 2) {
         try {
             const auto ms = std::stoi(argv[1]);
