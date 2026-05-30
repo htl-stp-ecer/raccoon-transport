@@ -323,6 +323,17 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
                                              memory_order_acquire);
     if (producer == r->last_seen) return 1;
 
+    // Producer restarted: the writer resets producer_seq back to 0
+    // (rrb_writer_create re-initialises the header in-place every time
+    // the producer process starts). When a subscriber's last_seen was
+    // 5000 from before the restart and producer is now 1, we'd loop
+    // forever picking "future" seq numbers that never come. Detect
+    // it as producer_seq < last_seen and resync to one behind the
+    // current producer so the very next read returns the latest frame.
+    if (producer < r->last_seen) {
+        r->last_seen = producer > 0 ? producer - 1 : 0;
+    }
+
     // If we're behind by more than (slot_count - 1), the producer has
     // lapped us. Jump to the most recent slot we can still safely read,
     // skipping the lost frames.
