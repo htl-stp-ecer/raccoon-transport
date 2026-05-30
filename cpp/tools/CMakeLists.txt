@@ -6,13 +6,8 @@ target_link_libraries(interop_publish PRIVATE raccoon::transport)
 add_executable(interop_subscribe interop_subscribe.cpp)
 target_link_libraries(interop_subscribe PRIVATE raccoon::transport)
 
-# iox2 dead-node janitor — long-lived systemd service that periodically
-# calls Node::try_cleanup_dead_nodes(). iceoryx2 is daemon-less by
-# design (no RouDi), so orphan node descriptors stay under
-# /tmp/iceoryx2/ whenever a process dies without running its
-# destructors. The janitor sweeps them out continuously so the next
-# Node::create() in any raccoon process finds a clean state. Links
-# only against iceoryx2-cxx — no raccoon::transport dependency —
-# keeping the binary small and independent of the raccoon wheel.
-add_executable(iox2_janitor iox2_janitor.cpp)
-target_link_libraries(iox2_janitor PRIVATE iceoryx2-cxx::static-lib-cxx)
+# iox2_janitor.cpp is intentionally NOT built any more — raccoon_transport
+# no longer uses iceoryx2 (see the parent CMakeLists.txt comment), so
+# there is nothing for the janitor to sweep. The .cpp is kept on disk
+# for reference until the next cleanup pass; the matching systemd unit
+# in stm32-data-reader/systemd/ should also be removed at the same time.

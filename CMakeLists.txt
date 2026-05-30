@@ -1,7 +1,7 @@
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 cmake_minimum_required(VERSION 3.22)
-project(raccoon_transport VERSION 0.1.0 LANGUAGES CXX)
+project(raccoon_transport VERSION 0.1.0 LANGUAGES C CXX)
 
 include(CTest)
 
@@ -11,44 +11,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
-# ---------- iceoryx2 ----------
-# Shared-memory pub/sub. Replaces the LCM UDP-multicast transport that
-# kept dropping packets on the production Pi (see RESULTS.md in the
-# benchmark history). The Rust core is built via cargo; the C++ binding
-# layer is added via the iceoryx2 CMake workspace. Requires rustc/cargo
-# and libclang on PATH (added to the manylinux build image — see
-# .github/docker/Dockerfile).
-#
-# Allow an external install to short-circuit the build (e.g. `pip install`
-# environments that vendor a pre-built iceoryx2). Setting
-# RACCOON_USE_SYSTEM_ICEORYX2=ON tells us to find_package() and skip the
-# FetchContent build.
-option(RACCOON_USE_SYSTEM_ICEORYX2
-    "Use an externally installed iceoryx2 (find_package) instead of FetchContent" OFF)
-# Pin to the commit we built and verified on the Pi (benchmark + smoke test).
-# Bump deliberately, not opportunistically.
-set(IOX2_GIT_TAG "a1bf22f688a3a5da5704ae52e006164c4e65a984"
-    CACHE STRING "iceoryx2 git revision to vendor")
-
-if(RACCOON_USE_SYSTEM_ICEORYX2)
-    find_package(iceoryx2-cxx 0.9.999 REQUIRED)
-else()
-    # Disable example builds: they failed our Pi build with "No space left on
-    # device" on a stuffed SD card and they bring nothing we need. Disable
-    # tests for the same reason.
-    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(BUILD_TESTING_TMP ${BUILD_TESTING})
-    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        iceoryx2
-        GIT_REPOSITORY https://github.com/eclipse-iceoryx/iceoryx2.git
-        GIT_TAG ${IOX2_GIT_TAG}
-        # GIT_SHALLOW omitted on purpose: we pin to a SHA, and shallow clones
-        # of arbitrary SHAs are not supported by the dumb HTTP transport.
-    )
-    FetchContent_MakeAvailable(iceoryx2)
-    set(BUILD_TESTING ${BUILD_TESTING_TMP} CACHE BOOL "" FORCE)
-endif()
+# ---------- Transport backend ----------
+# raccoon::Transport is backed by `raccoon_ring` (cpp/src/raccoon_ring.c) —
+# a single-producer multi-consumer SHM ring buffer that lives in this
+# tree. We previously vendored iceoryx2 v0.9.999-dev for this; it proved
+# unreliable on the deployed Pi (NodeBuilder::create failing with
+# InternalError once the stm32-data-reader had opened ~100 publishers,
+# subscribes hanging indefinitely on v0.9.1, sporadic data-delivery
+# failures even in isolated single-process repros). raccoon_ring is a
+# direct in-process drop-in: one /dev/shm file per channel, per-slot
+# SeqLock, pure polling. No daemon, no service descriptors, no marked-
+# for-destruction state machine to get stuck in. See
+# cpp/src/raccoon_ring.c for the implementation rationale.
 
 # ---------- LCM ----------
 # When cross-compiling, lcm-gen must execute on the HOST (x86_64), but the LCM
