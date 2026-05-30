@@ -53,6 +53,44 @@ static int futex_wake_all(_Atomic uint32_t* uaddr) {
                         INT_MAX, NULL, NULL, 0);
 }
 
+// futex_waitv glue (Linux 5.16+). Kernel headers from older toolchains
+// may not declare these — define them locally so we don't ride on a
+// linux-headers package being present at build time. Values from
+// include/uapi/linux/futex.h.
+
+#ifndef SYS_futex_waitv
+#  define SYS_futex_waitv 449  /* arm64/x86_64 syscall number */
+#endif
+#ifndef FUTEX2_SIZE_U32
+#  define FUTEX2_SIZE_U32 0x02
+#endif
+#ifndef FUTEX2_PRIVATE
+#  define FUTEX2_PRIVATE  0x80
+#endif
+
+struct rrb_futex_waitv {
+    uint64_t val;
+    uint64_t uaddr;
+    uint32_t flags;
+    uint32_t __reserved;
+};
+
+// Returns the kernel's "which entry woke me" index on a wake, -1 with
+// errno=ETIMEDOUT on timeout, -1 with errno otherwise.
+static int futex_waitv_until(struct rrb_futex_waitv* waiters, size_t n,
+                             int timeout_us) {
+    if (n == 0) return -1;
+    // CLOCK_MONOTONIC abstime for the syscall
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    int64_t total_ns = (int64_t)ts.tv_nsec + (int64_t)timeout_us * 1000LL;
+    ts.tv_sec += total_ns / 1000000000LL;
+    ts.tv_nsec = total_ns % 1000000000LL;
+    // clockid 1 = CLOCK_MONOTONIC
+    return (int)syscall(SYS_futex_waitv, waiters, (unsigned)n,
+                        /*flags=*/0u, &ts, /*clockid=*/1);
+}
+
 // ---- On-disk layout ----------------------------------------------------
 
 #pragma pack(push, 8)
@@ -474,6 +512,105 @@ int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
     (void)futex_wait_until(&r->hdr->wake_seq, expected, timeout_us);
     // EAGAIN, EINTR, ETIMEDOUT all fall through — re-poll either way.
     return rrb_reader_recv(r, buf, buf_size, out_len);
+}
+
+int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
+                              rrb_multi_handler cb, void* user,
+                              int timeout_us) {
+    if (!readers || !cb || n == 0 || n > 128) return -1;
+
+    // Tiny scratch buffer used by the drain loop — sized to RRB_DEFAULT
+    // for the common case and grown to the largest ring's max_payload
+    // we see attached. 8 KiB is plenty for non-camera channels.
+    uint8_t scratch[8192];
+    size_t scratch_sz = sizeof(scratch);
+    uint8_t* big = NULL;
+    size_t big_sz = 0;
+
+    // Pass 1: fast non-blocking drain across every reader. Most spins
+    // catch frames here without ever calling the syscall.
+    int delivered = 0;
+    for (size_t i = 0; i < n; ++i) {
+        rrb_reader_t* r = readers[i];
+        if (!r || !r->base) continue;
+        for (;;) {
+            size_t out_len = 0;
+            uint8_t* buf = scratch;
+            size_t buf_sz = scratch_sz;
+            if (r->hdr->max_payload > scratch_sz) {
+                if (r->hdr->max_payload > big_sz) {
+                    free(big);
+                    big_sz = r->hdr->max_payload;
+                    big = (uint8_t*)malloc(big_sz);
+                    if (!big) { delivered = -1; goto done; }
+                }
+                buf = big;
+                buf_sz = big_sz;
+            }
+            int rc = rrb_reader_recv(r, buf, buf_sz, &out_len);
+            if (rc != 0) break;
+            if (cb(i, buf, out_len, user) != 0) { goto done; }
+            ++delivered;
+        }
+    }
+    if (delivered > 0 || timeout_us == 0) goto done;
+
+    // Pass 2: build the waitv list and park. Only readers that are
+    // attached and whose wake_seq is observable get added; un-attached
+    // ones (file doesn't exist yet) skip the wait and are caught by
+    // the next caller's pass 1.
+    struct rrb_futex_waitv waiters[128];
+    size_t nw = 0;
+    for (size_t i = 0; i < n; ++i) {
+        rrb_reader_t* r = readers[i];
+        if (!r || !r->base) continue;
+        waiters[nw].val = atomic_load_explicit(&r->hdr->wake_seq,
+                                               memory_order_acquire);
+        waiters[nw].uaddr = (uint64_t)(uintptr_t)&r->hdr->wake_seq;
+        waiters[nw].flags = FUTEX2_SIZE_U32;
+        waiters[nw].__reserved = 0;
+        ++nw;
+    }
+    if (nw == 0) {
+        // No attached readers — fall back to a plain sleep so the caller
+        // doesn't burn a CPU spinning on the empty list.
+        struct timespec sleep_ts = {
+            timeout_us / 1000000,
+            (long)(timeout_us % 1000000) * 1000L,
+        };
+        nanosleep(&sleep_ts, NULL);
+        goto done;
+    }
+    (void)futex_waitv_until(waiters, nw, timeout_us);
+
+    // Pass 3: post-wake drain. Whatever woke us probably has data; the
+    // other channels' subsequent publishes will catch the next call.
+    for (size_t i = 0; i < n; ++i) {
+        rrb_reader_t* r = readers[i];
+        if (!r || !r->base) continue;
+        for (;;) {
+            size_t out_len = 0;
+            uint8_t* buf = scratch;
+            size_t buf_sz = scratch_sz;
+            if (r->hdr->max_payload > scratch_sz) {
+                if (r->hdr->max_payload > big_sz) {
+                    free(big);
+                    big_sz = r->hdr->max_payload;
+                    big = (uint8_t*)malloc(big_sz);
+                    if (!big) { delivered = -1; goto done; }
+                }
+                buf = big;
+                buf_sz = big_sz;
+            }
+            int rc = rrb_reader_recv(r, buf, buf_sz, &out_len);
+            if (rc != 0) break;
+            if (cb(i, buf, out_len, user) != 0) { goto done; }
+            ++delivered;
+        }
+    }
+done:
+    free(big);
+    return delivered;
 }
 
 void rrb_reader_close(rrb_reader_t* r) {

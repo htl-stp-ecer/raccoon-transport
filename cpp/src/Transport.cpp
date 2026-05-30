@@ -349,55 +349,57 @@ namespace raccoon
             }
         }
 
-        // Idle path: park on one subscriber's futex so we wake in ~us
-        // when its producer publishes, instead of polling every
-        // kSpinIdleSleepMs. We can only futex_wait on a single address
-        // at a time, so other subscribers still rely on the next
-        // spinOnce() iteration to pick them up — but at the rates the
-        // reader sees (heartbeat publishing 100 Hz on at least one
-        // channel), the waker fires constantly and effectively wakes
-        // the whole spin loop on every incoming frame on any channel.
-        // Falling back to a fixed sleep when there are no subscribers
-        // at all keeps the loop honest.
+        // Idle path: park on EVERY subscriber's wake_seq at once via
+        // futex_waitv. Wakes within microseconds on the first publish
+        // on ANY channel, then the helper drains every channel with
+        // data before returning so a single wakeup amortises across
+        // bursts. Falls back to a fixed sleep only when there are no
+        // subscribers at all.
         if (delivered == 0)
         {
             int timeoutUs = (timeoutMs > 0 && timeoutMs < 100)
                               ? timeoutMs * 1000 : kSpinIdleSleepMs * 1000;
             if (!subsSnapshot.empty())
             {
-                Impl::SubEntry* primary = subsSnapshot.front();
-                std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
-                if (impl_->isAlive() && primary->reader)
+                struct MultiCtx {
+                    Transport* t;
+                    Impl::SubEntry** entries;
+                    int* delivered_out;
+                };
+                std::vector<Impl::SubEntry*> entries(subsSnapshot);
+                std::vector<rrb_reader_t*> readers;
+                readers.reserve(entries.size());
                 {
-                    size_t outLen = 0;
-                    int rc = rrb_reader_recv_wait(primary->reader,
-                                                  primary->scratch.data(),
-                                                  primary->scratch.size(),
-                                                  &outLen,
-                                                  timeoutUs);
-                    // Dispatch if recv_wait actually got a frame so the
-                    // wakeup it returned with doesn't get wasted.
-                    if (rc == 0)
-                    {
-                        std::vector<Transport::RawHandler> handlersCopy =
-                            primary->handlers;
-                        std::vector<uint8_t> frame(
-                            primary->scratch.begin(),
-                            primary->scratch.begin() + outLen);
-                        int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                            std::chrono::system_clock::now().time_since_epoch()).count();
-                        int64_t msgUs = Impl::readTimestampBE(frame.data(),
-                                                              (int)frame.size());
-                        if (msgUs > 0)
-                            recordLatency(primary->channel, nowUs - msgUs);
-                        for (auto& h : handlersCopy)
-                        {
-                            try { h(frame.data(), (int)frame.size()); }
-                            catch (...) {}
-                        }
-                        ++delivered;
-                    }
+                    std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+                    if (!impl_->isAlive()) return delivered;
+                    for (auto* e : entries) readers.push_back(e->reader);
                 }
+                MultiCtx ctx{this, entries.data(), &delivered};
+                auto cb = [](size_t idx, const void* data, size_t len,
+                             void* user) -> int {
+                    auto* c = static_cast<MultiCtx*>(user);
+                    Impl::SubEntry* sub = c->entries[idx];
+                    int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    int64_t msgUs = Impl::readTimestampBE(data, (int)len);
+                    if (msgUs > 0)
+                        c->t->recordLatency(sub->channel, nowUs - msgUs);
+                    std::vector<Transport::RawHandler> handlersCopy;
+                    {
+                        // recordLatency takes its own lock; handler list
+                        // copy needs apiMutex.
+                        handlersCopy = sub->handlers;
+                    }
+                    for (auto& h : handlersCopy) {
+                        try { h(data, (int)len); }
+                        catch (...) {}
+                    }
+                    ++(*c->delivered_out);
+                    return 0;
+                };
+                (void)rrb_reader_recv_wait_many(
+                    readers.data(), readers.size(),
+                    cb, &ctx, timeoutUs);
             }
             else
             {

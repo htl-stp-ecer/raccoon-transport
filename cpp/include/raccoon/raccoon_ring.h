@@ -145,6 +145,27 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
 int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
                          size_t* out_len, int timeout_us);
 
+// Multi-channel event-driven wait. Parks the calling thread on the
+// wake_seq of EVERY reader in `readers[0..n)` simultaneously using the
+// kernel's futex_waitv syscall (Linux 5.16+). Wakes as soon as ANY of
+// the channels' producers publish, then drains every channel that has
+// data, dispatching frames into the provided per-reader callback.
+//
+// `cb(reader_index, payload, payload_len, user)` is invoked under the
+// caller's thread for each delivered frame; return non-zero to stop
+// draining mid-loop.
+//
+// `n` may be up to 128 (the kernel cap on FUTEX_WAITV is 128 entries).
+//
+// Returns the number of frames delivered. 0 on clean timeout/no-data,
+// -1 on error (n out of range, allocation failed, syscall unsupported).
+typedef int (*rrb_multi_handler)(size_t reader_index,
+                                 const void* payload, size_t len,
+                                 void* user);
+int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
+                              rrb_multi_handler cb, void* user,
+                              int timeout_us);
+
 void rrb_reader_close(rrb_reader_t* r);
 
 // ---- Utilities for tests + diagnostics ---------------------------------
