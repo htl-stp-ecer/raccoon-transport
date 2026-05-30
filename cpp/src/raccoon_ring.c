@@ -1,11 +1,16 @@
 // raccoon_ring.c — implementation. See raccoon_ring.h for design rationale.
 
-// Need _POSIX_C_SOURCE for ftruncate visibility under -std=c11.
+// Need _POSIX_C_SOURCE for ftruncate visibility under -std=c11, plus
+// _GNU_SOURCE for syscall() under glibc (it's in <unistd.h> only when
+// the GNU feature test macro is on).
 #define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 #include "raccoon/raccoon_ring.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <linux/futex.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,8 +18,40 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/time.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
+
+// ---- Futex glue --------------------------------------------------------
+//
+// We use raw FUTEX_WAIT / FUTEX_WAKE on a uint32_t living in the ring
+// header so producer wakes propagate to subscribers in another process
+// with sub-microsecond latency. The futex word is in shared (MAP_SHARED)
+// memory — the kernel hashes by physical address, so cross-process wakes
+// work without exchanging fds or pid info.
+//
+// FUTEX_WAIT semantics: the kernel atomically compares *uaddr to `val`
+// at wait time and only sleeps if they match. If a publish bumped the
+// value between the subscriber's snapshot read and the wait call, the
+// wait returns EAGAIN immediately — no lost wakeup race.
+
+static int futex_wait_until(_Atomic uint32_t* uaddr, uint32_t expected,
+                            int timeout_us) {
+    struct timespec ts = {
+        timeout_us / 1000000,
+        (long)(timeout_us % 1000000) * 1000L,
+    };
+    // syscall(SYS_futex, addr, op, val, timeout, uaddr2, val3)
+    return (int)syscall(SYS_futex, (uint32_t*)uaddr, FUTEX_WAIT,
+                        expected, &ts, NULL, 0);
+}
+
+static int futex_wake_all(_Atomic uint32_t* uaddr) {
+    return (int)syscall(SYS_futex, (uint32_t*)uaddr, FUTEX_WAKE,
+                        INT_MAX, NULL, NULL, 0);
+}
 
 // ---- On-disk layout ----------------------------------------------------
 
@@ -25,10 +62,16 @@ typedef struct {
     uint32_t slot_count;
     uint32_t slot_size;        // sizeof(slot_hdr) + max_payload, rounded up
     uint32_t max_payload;
-    uint32_t _reserved0;
+    // wake_seq is the futex word producers bump after every successful
+    // publish. Subscribers FUTEX_WAIT on it for event-driven receive
+    // instead of polling — drops idle CPU to 0 and per-publish wake
+    // latency to ~us. uint32_t (futex requirement). Placed BEFORE
+    // producer_seq so its address is 8-byte aligned and the producer_seq
+    // 64-bit atomic stays 8-aligned right after.
+    _Atomic uint32_t wake_seq;
     _Atomic uint64_t producer_seq;  // monotonic, slot_idx = (seq-1) % count
     char     channel_name[128];
-    uint8_t  pad[96];  // align header to 256 bytes (32 + 128 + 96 = 256)
+    uint8_t  pad[96];  // align header to 256 bytes (28 + 4 + 128 + 96 = 256)
 } ring_hdr_t;
 
 typedef struct {
@@ -160,8 +203,9 @@ static int shm_open_mmap(const char* path,
         h->slot_count  = want_slot_count;
         h->slot_size   = (uint32_t)slot_stride(want_max_payload);
         h->max_payload = want_max_payload;
-        h->_reserved0  = 0;
+        // (wake_seq replaced the old _reserved0 padding slot.)
         atomic_store_explicit(&h->producer_seq, 0, memory_order_release);
+        atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
         strncpy(h->channel_name, channel_name, sizeof(h->channel_name) - 1);
         h->channel_name[sizeof(h->channel_name) - 1] = '\0';
         // Zero every slot's seq field so the first publish wraps cleanly.
@@ -240,6 +284,18 @@ int rrb_writer_publish(rrb_writer_t* w, const void* data, size_t len) {
     //    global counter. Release order: a reader observing producer_seq
     //    == next must afterwards see slot->seq == next too.
     atomic_store_explicit(&w->hdr->producer_seq, next, memory_order_release);
+
+    // 6) Bump the futex word and wake every subscriber currently parked
+    //    in rrb_reader_recv_wait(). The increment-then-wake order
+    //    matches the futex protocol: subscribers snapshot wake_seq,
+    //    re-check producer_seq, and FUTEX_WAIT(expected=snapshot). If
+    //    we bump the value between their snapshot and their wait call
+    //    the kernel returns EAGAIN — no lost wakeup. FUTEX_WAKE on a
+    //    word with no waiters is ~50 ns; cheap enough to do every
+    //    publish even at 1 kHz channel rates.
+    atomic_fetch_add_explicit(&w->hdr->wake_seq, 1u,
+                              memory_order_release);
+    (void)futex_wake_all(&w->hdr->wake_seq);
     return 0;
 }
 
@@ -386,6 +442,38 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
     // this single slot). Skip and let the next poll catch up.
     r->last_seen = next;
     return 1;
+}
+
+int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
+                         size_t* out_len, int timeout_us) {
+    if (!r || !buf || !out_len) return -1;
+
+    // Fast path: try once before parking. Covers the common case where
+    // the producer published while we were processing the last frame —
+    // no syscall needed.
+    int rc = rrb_reader_recv(r, buf, buf_size, out_len);
+    if (rc != 1) return rc;          // 0 = got data, -1 = error
+    if (timeout_us <= 0) return 1;   // caller wanted non-blocking
+
+    // Park on the producer's wake_seq. The futex protocol guarantees
+    // no lost wakeups: if the producer bumps wake_seq between our
+    // snapshot and the syscall, the kernel returns EAGAIN immediately
+    // and we re-poll.
+    //
+    // We only need r->base mapped to read wake_seq. If the producer
+    // hasn't materialised the file yet (lazy attach failed inside
+    // rrb_reader_recv above), wait a few ms and try again.
+    if (!r->base) {
+        struct timespec lazy = {0, 1000000L};  // 1 ms
+        nanosleep(&lazy, NULL);
+        return rrb_reader_recv(r, buf, buf_size, out_len);
+    }
+
+    uint32_t expected = atomic_load_explicit(&r->hdr->wake_seq,
+                                             memory_order_acquire);
+    (void)futex_wait_until(&r->hdr->wake_seq, expected, timeout_us);
+    // EAGAIN, EINTR, ETIMEDOUT all fall through — re-poll either way.
+    return rrb_reader_recv(r, buf, buf_size, out_len);
 }
 
 void rrb_reader_close(rrb_reader_t* r) {

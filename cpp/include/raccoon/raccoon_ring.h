@@ -63,7 +63,12 @@ extern "C" {
 // adapt to whatever the producer chose.
 
 #define RRB_MAGIC      0x52435242u  // "RCRB"
-#define RRB_VERSION    1u
+// v2: added wake_seq futex word — producers FUTEX_WAKE on it after each
+// publish so subscribers using rrb_reader_recv_wait() get event-driven
+// wakeups instead of polling. v1 files are rejected at attach so a
+// mixed-version subscriber/producer pair can't accidentally talk to
+// each other on stale header layouts.
+#define RRB_VERSION    2u
 
 // Default sizing: 64 slots × 2 KiB payload = ~130 KiB per channel.
 // Big enough for any LCM message in raccoon-transport's catalogue
@@ -122,6 +127,23 @@ rrb_reader_t* rrb_reader_open(const char* channel);
 // never wait for old ones.
 // Returns -1 on hard error (handle invalid, ring magic broken).
 int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len);
+
+// Event-driven receive. Identical contract to rrb_reader_recv except
+// that when no data is available, the calling thread sleeps inside a
+// futex_wait on the ring's wake_seq word until either:
+//   * the producer publishes (wake_seq bumped, FUTEX_WAKE delivered)
+//   * `timeout_us` microseconds elapse
+//   * the thread is interrupted by a signal
+//
+// Pass `timeout_us == 0` for a non-blocking call (equivalent to plain
+// rrb_reader_recv). Pass a large value (e.g. 50_000) in a poll loop to
+// keep CPU at zero while idle but still wake regularly enough that
+// shutdown signals get acknowledged.
+//
+// Returns 0 + frame on success, 1 on timeout / no-data after wake,
+// -1 on hard error.
+int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
+                         size_t* out_len, int timeout_us);
 
 void rrb_reader_close(rrb_reader_t* r);
 
