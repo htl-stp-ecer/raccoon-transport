@@ -170,6 +170,18 @@ namespace raccoon
             }
             std::this_thread::sleep_for(delay);
             delay = std::min(delay * 2, kIoxRetryMaxDelay);
+            // Actively reap dead nodes between retries. Without this,
+            // OpenIsMarkedForDestruction caused by a SIGTERM'd peer (cli
+            // restarting user main.py, an abruptly killed daemon, etc.)
+            // never resolves inside our 5 s budget — iox2 only purges the
+            // descriptor when *someone* runs cleanup, and the janitor's
+            // 30 s tick is too slow to cover an interactive `raccoon run`.
+            // try_cleanup_dead_nodes is the documented self-heal escape
+            // hatch: cheap when there's nothing to reap, idempotent, and
+            // exactly what unblocks the wedged open_or_create on the next
+            // attempt.
+            (void)iox2::Node<iox2::ServiceType::Ipc>::try_cleanup_dead_nodes(
+                iox2::Config::global_config());
             last = fn();
         }
         if (!last.has_value() && operation)
