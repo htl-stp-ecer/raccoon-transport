@@ -452,7 +452,8 @@ namespace raccoon
         ch.latencyMaxUs = std::max(ch.latencyMaxUs, us);
         ch.latencySumUs += us;
         ++ch.latencyCount;
-        ++ch.deliveries;
+        // ch.deliveries is bumped in recordCallback() so payloads without
+        // a parseable timestamp prefix still register a delivery.
     }
 
     void Transport::recordCallback(const std::string& channel, int64_t us)
@@ -468,6 +469,12 @@ namespace raccoon
         ch.callbackMaxUs = std::max(ch.callbackMaxUs, us);
         ch.callbackSumUs += us;
         ++ch.callbackCount;
+        // Count every frame we hand off to a user handler, not only the
+        // ones whose payload carried a parseable timestamp prefix.
+        // recordLatency() also ticks deliveries when it runs, but it short-
+        // circuits on payloads < 8 bytes — without this bump, callers that
+        // publish small raw frames would see zero deliveries reported.
+        ++ch.deliveries;
     }
 
     void Transport::recordSpin(int result, int64_t us)
