@@ -55,9 +55,25 @@ namespace raccoon::Channels
     // Parametric channels (port-indexed)
     using PortId = int;
 
+    // Servo mode STATE — reader publishes the current mode here; UIs
+    // subscribe for state feedback. Mirrors the motorPower / motorPower
+    // Command split: state lives on `mode`, commands on `mode_cmd`.
+    // Splitting the formerly-shared single `mode` channel removed the
+    // reader's self-loopback (it used to subscribe to its own publishes
+    // for ~5 ms of internal latency floor) and aligns servo channels
+    // with the established motor convention.
     inline std::string servoMode(const PortId port)
     {
         return "raccoon/servo/" + std::to_string(port) + "/mode";
+    }
+
+    // Servo mode COMMAND — publishers (raccoon-lib LcmDataWriter,
+    // botui's disable buttons) write desired mode here; reader's
+    // CommandSubscriber listens. Separate from the state channel above
+    // so reader does not subscribe to its own publishes.
+    inline std::string servoModeCommand(const PortId port)
+    {
+        return "raccoon/servo/" + std::to_string(port) + "/mode_cmd";
     }
 
     inline std::string servoPosition(const PortId port)
