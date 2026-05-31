@@ -63,12 +63,12 @@ extern "C" {
 // adapt to whatever the producer chose.
 
 #define RRB_MAGIC      0x52435242u  // "RCRB"
-// v2: added wake_seq futex word — producers FUTEX_WAKE on it after each
-// publish so subscribers using rrb_reader_recv_wait() get event-driven
-// wakeups instead of polling. v1 files are rejected at attach so a
-// mixed-version subscriber/producer pair can't accidentally talk to
-// each other on stale header layouts.
-#define RRB_VERSION    2u
+// v3: added waiter_count atomic — readers inc/dec around their
+// futex_wait so producers can skip the FUTEX_WAKE syscall entirely
+// when nobody is parked. Cuts publisher CPU at high publish rates
+// (~2 kHz across reader telemetry channels) since the typical case
+// is zero waiters per channel.
+#define RRB_VERSION    3u
 
 // Default sizing: 64 slots × 2 KiB payload = ~130 KiB per channel.
 // Big enough for any LCM message in raccoon-transport's catalogue

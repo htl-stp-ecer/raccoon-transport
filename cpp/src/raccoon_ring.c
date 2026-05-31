@@ -107,9 +107,15 @@ typedef struct {
     // producer_seq so its address is 8-byte aligned and the producer_seq
     // 64-bit atomic stays 8-aligned right after.
     _Atomic uint32_t wake_seq;
+    // v3 addition. Readers inc this before parking in futex_wait and
+    // dec after returning; producers skip the FUTEX_WAKE syscall when
+    // it's 0. The atomic itself is acquire/release-ordered so the
+    // producer's load can't speculatively reorder past the publish.
+    _Atomic uint32_t waiter_count;
+    uint32_t _pad0;                  // align producer_seq to 8 bytes
     _Atomic uint64_t producer_seq;  // monotonic, slot_idx = (seq-1) % count
     char     channel_name[128];
-    uint8_t  pad[96];  // align header to 256 bytes (28 + 4 + 128 + 96 = 256)
+    uint8_t  pad[88];  // align header to 256 bytes (40 + 128 + 88 = 256)
 } ring_hdr_t;
 
 typedef struct {
@@ -244,6 +250,7 @@ static int shm_open_mmap(const char* path,
         // (wake_seq replaced the old _reserved0 padding slot.)
         atomic_store_explicit(&h->producer_seq, 0, memory_order_release);
         atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
+        atomic_store_explicit(&h->waiter_count, 0u, memory_order_release);
         strncpy(h->channel_name, channel_name, sizeof(h->channel_name) - 1);
         h->channel_name[sizeof(h->channel_name) - 1] = '\0';
         // Zero every slot's seq field so the first publish wraps cleanly.
@@ -333,7 +340,16 @@ int rrb_writer_publish(rrb_writer_t* w, const void* data, size_t len) {
     //    publish even at 1 kHz channel rates.
     atomic_fetch_add_explicit(&w->hdr->wake_seq, 1u,
                               memory_order_release);
-    (void)futex_wake_all(&w->hdr->wake_seq);
+    // Skip the FUTEX_WAKE syscall when nobody is parked. Telemetry
+    // channels publish at ~100 Hz across ~20 channels; a Pi spending
+    // 2 kHz/s on no-op syscalls is measurable. The waiter_count
+    // load is acquire so it can't be reordered past the publish
+    // (matching the reader's release-ordered increment below — if
+    // they see our publish, we see their bump or they see our wake).
+    if (atomic_load_explicit(&w->hdr->waiter_count,
+                             memory_order_acquire) > 0u) {
+        (void)futex_wake_all(&w->hdr->wake_seq);
+    }
     return 0;
 }
 
@@ -362,15 +378,48 @@ struct rrb_reader_s {
     uint64_t    last_open_attempt_ns;  // for lazy re-attach throttling
 };
 
+// Detach from the current mmap (if any) and reset fields so the next
+// recv() call triggers a fresh reader_attach(). Safe to call even when
+// the reader is not attached.
+static void reader_detach(rrb_reader_t* r) {
+    if (r->base && r->base != MAP_FAILED) munmap(r->base, r->size);
+    if (r->fd >= 0) close(r->fd);
+    r->base   = NULL;
+    r->size   = 0;
+    r->hdr    = NULL;
+    r->slots  = NULL;
+    r->stride = 0;
+    r->fd     = -1;
+    r->last_seen = 0;
+}
+
 // Try to attach. Sets the mmap fields if successful; returns 0 on
-// success, -2 if file doesn't exist yet (lazy), -1 on hard error.
+// success, -1 on hard error.
+//
+// When the file doesn't exist yet the reader creates it with default
+// parameters so that a writer that starts later can take it over.
+// This handles producers that unlink their ring files after creation
+// (e.g. POSIX shm_open+shm_unlink pattern): without this fallback a
+// subscriber that starts after the unlink would never see any data
+// because the directory entry is gone. Creating the file here gives
+// the writer a fresh file to re-initialise when it (re)starts.
 static int reader_attach(rrb_reader_t* r) {
     int fd = -1;
     void* base = NULL;
     size_t size = 0;
     int rc = shm_open_mmap(r->path, /*create=*/0, 0, 0, r->channel,
                            &base, &size, &fd);
-    if (rc != 0) return rc;
+    if (rc == -2) {
+        // File doesn't exist.  Create it with defaults so the reader
+        // has a valid mmap.  A late-arriving writer will re-initialise
+        // the header in-place via rrb_writer_create.
+        rc = shm_open_mmap(r->path, /*create=*/1,
+                           RRB_DEFAULT_SLOT_COUNT, RRB_DEFAULT_MAX_PAYLOAD,
+                           r->channel, &base, &size, &fd);
+        if (rc != 0) return rc;
+    } else if (rc != 0) {
+        return rc;
+    }
 
     ring_hdr_t* h = (ring_hdr_t*)base;
     if (h->magic != RRB_MAGIC || h->version != RRB_VERSION) {
@@ -387,6 +436,32 @@ static int reader_attach(rrb_reader_t* r) {
     r->slots  = (uint8_t*)base + sizeof(ring_hdr_t);
     r->stride = h->slot_size;
     return 0;
+}
+
+// Check whether the underlying SHM file has been unlinked (st_nlink == 0)
+// and, if a replacement file exists at the same path, detach from the
+// orphaned mmap and re-attach to the fresh inode. Returns 0 if still
+// attached (no action taken or re-attach succeeded), -1 on error.
+//
+// This handles producers (e.g. stm32-data-reader) that create the ring
+// file and then immediately unlink it — a common POSIX pattern that
+// keeps the producer's own fd alive but prevents new readers from
+// opening the directory entry. When the producer restarts and creates a
+// fresh file with the same path, old readers see no new data because
+// their mmap points at the deleted (orphaned) inode.  Checking
+// st_nlink == 0 catches this and triggers a transparent re-attach.
+static int reader_reopen_if_unlinked(rrb_reader_t* r) {
+    if (r->fd < 0) return -1;
+    struct stat st;
+    if (fstat(r->fd, &st) != 0) return -1;
+    if (st.st_nlink > 0) return 0;  // still reachable — nothing to do
+
+    // File was unlinked. Detach from the orphaned mmap and re-attach.
+    // reader_attach() will ENOENT => lazy if the new producer hasn't
+    // materialised yet; the next recv() call retries as usual.
+    reader_detach(r);
+    int rc = reader_attach(r);
+    return (rc == 0) ? 0 : -1;
 }
 
 rrb_reader_t* rrb_reader_open(const char* channel) {
@@ -415,7 +490,20 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
 
     uint64_t producer = atomic_load_explicit(&r->hdr->producer_seq,
                                              memory_order_acquire);
-    if (producer == r->last_seen) return 1;
+    if (producer == r->last_seen) {
+        // No new data.  The underlying file may have been unlinked
+        // and replaced since we last attached — if so, re-attach so
+        // the next poll sees the fresh inode.
+        reader_reopen_if_unlinked(r);
+        if (r->base) {
+            // Re-attach succeeded — re-read producer_seq from the
+            // fresh file. If data is already available, fall through
+            // into the normal read path instead of returning early.
+            producer = atomic_load_explicit(&r->hdr->producer_seq,
+                                            memory_order_acquire);
+        }
+        if (producer == r->last_seen) return 1;
+    }
 
     // Producer restarted: the writer resets producer_seq back to 0
     // (rrb_writer_create re-initialises the header in-place every time
@@ -507,9 +595,18 @@ int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
         return rrb_reader_recv(r, buf, buf_size, out_len);
     }
 
+    // Bump waiter_count BEFORE snapshotting wake_seq so the writer's
+    // skip check (load waiter_count, then publish) can't miss us: if
+    // the writer's load happens-before our increment, our snapshot of
+    // wake_seq will already include the writer's publish and the
+    // futex_wait returns EAGAIN immediately.
+    atomic_fetch_add_explicit(&r->hdr->waiter_count, 1u,
+                              memory_order_release);
     uint32_t expected = atomic_load_explicit(&r->hdr->wake_seq,
                                              memory_order_acquire);
     (void)futex_wait_until(&r->hdr->wake_seq, expected, timeout_us);
+    atomic_fetch_sub_explicit(&r->hdr->waiter_count, 1u,
+                              memory_order_release);
     // EAGAIN, EINTR, ETIMEDOUT all fall through — re-poll either way.
     return rrb_reader_recv(r, buf, buf_size, out_len);
 }
@@ -581,7 +678,25 @@ int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
         nanosleep(&sleep_ts, NULL);
         goto done;
     }
+    // Bump waiter_count on every reader we're about to park on so
+    // writers know to FUTEX_WAKE us. Ordering matters: increment
+    // first, then re-snapshot wake_seq inside futex_waitv (already
+    // done above with memory_order_acquire). If a writer races us
+    // and publishes between our wake_seq snapshot and futex_waitv,
+    // the kernel returns EAGAIN — we re-drain in pass 3.
+    for (size_t i = 0; i < n; ++i) {
+        rrb_reader_t* r = readers[i];
+        if (!r || !r->base) continue;
+        atomic_fetch_add_explicit(&r->hdr->waiter_count, 1u,
+                                  memory_order_release);
+    }
     (void)futex_waitv_until(waiters, nw, timeout_us);
+    for (size_t i = 0; i < n; ++i) {
+        rrb_reader_t* r = readers[i];
+        if (!r || !r->base) continue;
+        atomic_fetch_sub_explicit(&r->hdr->waiter_count, 1u,
+                                  memory_order_release);
+    }
 
     // Pass 3: post-wake drain. Whatever woke us probably has data; the
     // other channels' subsequent publishes will catch the next call.
