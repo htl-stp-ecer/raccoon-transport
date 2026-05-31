@@ -396,28 +396,17 @@ static void reader_detach(rrb_reader_t* r) {
 // Try to attach. Sets the mmap fields if successful; returns 0 on
 // success, -1 on hard error.
 //
-// When the file doesn't exist yet the reader creates it with default
-// parameters so that a writer that starts later can take it over.
-// This handles producers that unlink their ring files after creation
-// (e.g. POSIX shm_open+shm_unlink pattern): without this fallback a
-// subscriber that starts after the unlink would never see any data
-// because the directory entry is gone. Creating the file here gives
-// the writer a fresh file to re-initialise when it (re)starts.
+// When the file doesn't exist yet we stay detached and let recv() retry.
+// Readers must not create placeholder rings: if a real producer later
+// materialises the channel with a smaller layout, its ftruncate can shrink
+// the file under the reader's larger mmap and SIGBUS the next access.
 static int reader_attach(rrb_reader_t* r) {
     int fd = -1;
     void* base = NULL;
     size_t size = 0;
     int rc = shm_open_mmap(r->path, /*create=*/0, 0, 0, r->channel,
                            &base, &size, &fd);
-    if (rc == -2) {
-        // File doesn't exist.  Create it with defaults so the reader
-        // has a valid mmap.  A late-arriving writer will re-initialise
-        // the header in-place via rrb_writer_create.
-        rc = shm_open_mmap(r->path, /*create=*/1,
-                           RRB_DEFAULT_SLOT_COUNT, RRB_DEFAULT_MAX_PAYLOAD,
-                           r->channel, &base, &size, &fd);
-        if (rc != 0) return rc;
-    } else if (rc != 0) {
+    if (rc != 0) {
         return rc;
     }
 
@@ -488,85 +477,80 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
         if (reader_attach(r) != 0) return 1;
     }
 
-    uint64_t producer = atomic_load_explicit(&r->hdr->producer_seq,
-                                             memory_order_acquire);
-    if (producer == r->last_seen) {
-        // No new data.  The underlying file may have been unlinked
-        // and replaced since we last attached — if so, re-attach so
-        // the next poll sees the fresh inode.
-        reader_reopen_if_unlinked(r);
-        if (r->base) {
-            // Re-attach succeeded — re-read producer_seq from the
-            // fresh file. If data is already available, fall through
-            // into the normal read path instead of returning early.
-            producer = atomic_load_explicit(&r->hdr->producer_seq,
-                                            memory_order_acquire);
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        uint64_t producer = atomic_load_explicit(&r->hdr->producer_seq,
+                                                 memory_order_acquire);
+        if (producer == r->last_seen) {
+            // No new data.  The underlying file may have been unlinked
+            // and replaced since we last attached — if so, re-attach so
+            // the next poll sees the fresh inode.
+            reader_reopen_if_unlinked(r);
+            if (r->base) {
+                producer = atomic_load_explicit(&r->hdr->producer_seq,
+                                                memory_order_acquire);
+            }
+            if (producer == r->last_seen) return 1;
         }
-        if (producer == r->last_seen) return 1;
-    }
 
-    // Producer restarted: the writer resets producer_seq back to 0
-    // (rrb_writer_create re-initialises the header in-place every time
-    // the producer process starts). When a subscriber's last_seen was
-    // 5000 from before the restart and producer is now 1, we'd loop
-    // forever picking "future" seq numbers that never come. Detect
-    // it as producer_seq < last_seen and resync to one behind the
-    // current producer so the very next read returns the latest frame.
-    if (producer < r->last_seen) {
-        r->last_seen = producer > 0 ? producer - 1 : 0;
-    }
-
-    // If we're behind by more than (slot_count - 1), the producer has
-    // lapped us. Jump to the most recent slot we can still safely read,
-    // skipping the lost frames.
-    uint64_t next;
-    if (producer - r->last_seen > (uint64_t)r->hdr->slot_count - 1u) {
-        // Aim for one full lap behind the producer so we read the OLDEST
-        // still-intact slot in the ring instead of the one the writer is
-        // currently overwriting.
-        next = producer - ((uint64_t)r->hdr->slot_count - 1u);
-    } else {
-        next = r->last_seen + 1;
-    }
-
-    uint32_t slot_idx = (uint32_t)((next - 1) % r->hdr->slot_count);
-    slot_hdr_t* s = (slot_hdr_t*)(r->slots + (size_t)slot_idx * r->stride);
-
-    // SeqLock read: snapshot seq, copy payload, re-check seq. If it
-    // changed, the slot was overwritten by the producer mid-copy and we
-    // must move on — same data loss policy as overrun above.
-    for (int retry = 0; retry < 3; ++retry) {
-        uint64_t seq_before = atomic_load_explicit(&s->seq, memory_order_acquire);
-        if (seq_before == 0 || seq_before < next) {
-            // Producer cleared the slot to write something new; treat as
-            // overrun, bump last_seen so we move past this seq.
-            r->last_seen = next;
-            return 1;
+        // Producer restarted: producer_seq moved backwards because
+        // rrb_writer_create re-initialised the ring in place. Reset to
+        // the START of the new epoch so we replay every still-intact frame
+        // from the restarted producer, not just the current tail.
+        if (producer < r->last_seen) {
+            r->last_seen = 0;
+            if (producer == 0) return 1;
         }
-        if (seq_before > next) {
-            // Producer already wrote a NEWER seq into this slot since we
-            // looked. Advance to that seq and re-poll.
-            r->last_seen = seq_before - 1;
-            return rrb_reader_recv(r, buf, buf_size, out_len);
-        }
-        // seq_before == next — slot looks valid. Copy payload.
-        uint32_t len = s->len;
-        if (len > r->hdr->max_payload) len = r->hdr->max_payload;
-        size_t copy_len = len > buf_size ? buf_size : len;
-        memcpy(buf, s->data, copy_len);
 
-        // Verify seq didn't change during the copy.
-        uint64_t seq_after = atomic_load_explicit(&s->seq, memory_order_acquire);
-        if (seq_after == next) {
-            *out_len = copy_len;
-            r->last_seen = next;
-            return 0;
+        // If we're behind by more than (slot_count - 1), the producer has
+        // lapped us. Jump to the oldest still-intact slot in the ring.
+        uint64_t next;
+        if (producer - r->last_seen > (uint64_t)r->hdr->slot_count - 1u) {
+            next = producer - ((uint64_t)r->hdr->slot_count - 1u);
+        } else {
+            next = r->last_seen + 1;
         }
-        // Slot was overwritten during our copy — retry with the newer seq.
+
+        uint32_t slot_idx = (uint32_t)((next - 1) % r->hdr->slot_count);
+        slot_hdr_t* s = (slot_hdr_t*)(r->slots + (size_t)slot_idx * r->stride);
+
+        // SeqLock read: snapshot seq, copy payload, re-check seq. If it
+        // changed, the slot was overwritten by the producer mid-copy and we
+        // must move on — same data loss policy as overrun above.
+        for (int retry = 0; retry < 3; ++retry) {
+            uint64_t seq_before = atomic_load_explicit(&s->seq, memory_order_acquire);
+            if (seq_before == 0 || seq_before < next) {
+                // Producer cleared the slot to write something new; treat as
+                // overrun, bump last_seen so we move past this seq.
+                r->last_seen = next;
+                return 1;
+            }
+            if (seq_before > next) {
+                // Producer already wrote a NEWER seq into this slot since we
+                // looked. Advance to that seq and retry from the top without
+                // recursion; after a producer restart this may briefly point at
+                // stale high seq numbers from the prior epoch.
+                r->last_seen = seq_before - 1;
+                break;
+            }
+            // seq_before == next — slot looks valid. Copy payload.
+            uint32_t len = s->len;
+            if (len > r->hdr->max_payload) len = r->hdr->max_payload;
+            size_t copy_len = len > buf_size ? buf_size : len;
+            memcpy(buf, s->data, copy_len);
+
+            // Verify seq didn't change during the copy.
+            uint64_t seq_after = atomic_load_explicit(&s->seq, memory_order_acquire);
+            if (seq_after == next) {
+                *out_len = copy_len;
+                r->last_seen = next;
+                return 0;
+            }
+            // Slot was overwritten during our copy — retry with the newer seq.
+        }
     }
-    // Three retries failed (producer is writing faster than we can copy
-    // this single slot). Skip and let the next poll catch up.
-    r->last_seen = next;
+    // The producer kept moving while we were inspecting the ring, or we
+    // saw an inconsistent restart boundary. Let the next poll retry from
+    // the updated last_seen state instead of recursing indefinitely.
     return 1;
 }
 
