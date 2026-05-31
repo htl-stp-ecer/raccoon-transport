@@ -9,8 +9,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-include(FetchContent)
-
 # ---------- Transport backend ----------
 # raccoon::Transport is backed by `raccoon_ring` (cpp/src/raccoon_ring.c) —
 # a single-producer multi-consumer SHM ring buffer that lives in this
@@ -25,34 +23,23 @@ include(FetchContent)
 # cpp/src/raccoon_ring.c for the implementation rationale.
 
 # ---------- LCM ----------
-# When cross-compiling, lcm-gen must execute on the HOST (x86_64), but the LCM
-# C library must be compiled for the TARGET (aarch64).
-# Strategy: detect cross-compilation and use the system-installed host lcm-gen
-# for code generation, while still building the LCM library from source for the
-# target architecture via FetchContent.
-set(LCM_ENABLE_JAVA OFF CACHE BOOL "" FORCE)
-set(LCM_ENABLE_PYTHON OFF CACHE BOOL "" FORCE)
-set(LCM_ENABLE_DOCS OFF CACHE BOOL "" FORCE)
-set(LCM_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    lcm
-    GIT_REPOSITORY https://github.com/lcm-proj/lcm.git
-    GIT_TAG v1.5.0
-)
-FetchContent_MakeAvailable(lcm)
-
-# lcm_wrap_types is defined in lcmUtilities.cmake
-include(${lcm_SOURCE_DIR}/lcm-cmake/lcmUtilities.cmake)
+# Message code generation still uses the installed LCM CMake package for
+# lcm-gen, lcm_wrap_types(), and lcm_coretypes declarations. We no longer
+# vendor or build libLCM from source in this tree.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GLib2 REQUIRED IMPORTED_TARGET glib-2.0)
+add_library(GLib2::glib INTERFACE IMPORTED GLOBAL)
+set_target_properties(GLib2::glib PROPERTIES
+  INTERFACE_LINK_LIBRARIES PkgConfig::GLib2)
+find_package(lcm CONFIG REQUIRED)
+include("${lcm_DIR}/lcmUtilities.cmake")
 
 if(CMAKE_CROSSCOMPILING)
-  # When cross-compiling, lcm-gen was not built (lcmgen/ subdir is skipped via
-  # a patch applied by build-cross.sh). Provide it as an IMPORTED EXECUTABLE
-  # pointing to the host-installed lcm-gen so that lcm_wrap_types() custom
-  # commands (which reference the "lcm-gen" CMake target) work correctly.
+  # When cross-compiling, lcm-gen must execute on the host even if the imported
+  # LCM package came from the target sysroot.
   find_program(_host_lcm_gen lcm-gen REQUIRED
-    PATHS /usr/bin /usr/local/bin
+    PATHS /usr/bin /usr/local/bin "$ENV{HOME}/.local/bin"
     NO_CMAKE_FIND_ROOT_PATH)
-  add_executable(lcm-gen IMPORTED GLOBAL)
   set_target_properties(lcm-gen PROPERTIES IMPORTED_LOCATION "${_host_lcm_gen}")
   message(STATUS "Cross-compile: using host lcm-gen at ${_host_lcm_gen}")
 endif()

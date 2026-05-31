@@ -29,4 +29,4 @@ lcm_add_library(raccoon-messages-cpp CPP ${cpp_headers})
 target_include_directories(raccoon-messages-cpp INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
 )
-target_link_libraries(raccoon-messages-cpp INTERFACE ${LCM_NAMESPACE}lcm-static)
+target_link_libraries(raccoon-messages-cpp INTERFACE ${LCM_NAMESPACE}lcm-coretypes)

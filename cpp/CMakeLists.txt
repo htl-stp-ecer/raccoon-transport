@@ -40,12 +40,7 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_producer_restart_tests
         COMMAND raccoon_transport_producer_restart_tests)
-endif()
 
-# Unit tests are temporarily disabled: they deep-test the LCM-channel-based
-# reliable/retain protocols that have not yet been ported to the new
-# raccoon_ring backend. Re-enable once a fresh test surface exists.
-if (BUILD_TESTING AND RACCOON_TRANSPORT_BUILD_LCM_TESTS)
     add_executable(raccoon_transport_unit_tests tests/transport_unit_tests.cpp)
     target_link_libraries(raccoon_transport_unit_tests PRIVATE raccoon_transport)
     target_include_directories(raccoon_transport_unit_tests PRIVATE
