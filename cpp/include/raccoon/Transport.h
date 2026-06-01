@@ -117,9 +117,24 @@ namespace raccoon
                     std::chrono::system_clock::now().time_since_epoch()).count();
             }
 
+            // Most messages are << 1 KiB (motor/servo cmds, sensor values).
+            // Use a stack buffer for the common case; only heap-allocate
+            // when a frame genuinely exceeds the inline capacity (camera
+            // / screen render). Removes the per-publish vector malloc
+            // that showed up as ~8 % of CPU in the perf trace at 200 Hz
+            // motor publishes.
+            constexpr int kInlineBuf = 1024;
             int maxLen = stamped.encoded_size();
+            int encodedLen;
+            if (maxLen <= kInlineBuf)
+            {
+                uint8_t inlineBuf[kInlineBuf];
+                encodedLen = stamped.encode(inlineBuf, maxLen);
+                if (encodedLen < 0) return false;
+                return publishRaw(channel, inlineBuf, encodedLen, options);
+            }
             std::vector<uint8_t> buf(maxLen);
-            int encodedLen = stamped.encode(buf.data(), maxLen);
+            encodedLen = stamped.encode(buf.data(), maxLen);
             if (encodedLen < 0) return false;
             return publishRaw(channel, buf.data(), encodedLen, options);
         }

@@ -1,9 +1,37 @@
 #pragma once
 
+#include <array>
 #include <string>
 
 namespace raccoon::Channels
 {
+    // Per-port channel-name accessors are hot — at 200 Hz × 4 motors the
+    // old `"raccoon/motor/" + to_string(port) + "/velocity_cmd"` built and
+    // freed ~800 std::strings/sec just to publish (perf trace showed ~8 %
+    // CPU in malloc ← TransportWriter::setMotorVelocity).
+    //
+    // Each accessor now memoises into a static `std::array<std::string, 16>`
+    // and returns a reference to the cached string. 16 covers the existing
+    // hardware port counts (4 motors + 4 servos + 6 analog + 11 digital —
+    // digital tops at 15 in the Wombat schema). Callers must NOT keep the
+    // reference longer than they keep the cache alive, which is forever
+    // since storage is static.
+    #define RACCOON_CACHED_CHANNEL(prefix, suffix)                              \
+        do                                                                       \
+        {                                                                        \
+            static const std::array<std::string, 16> _cache = []                 \
+            {                                                                    \
+                std::array<std::string, 16> a;                                   \
+                for (int _i = 0; _i < 16; ++_i)                                  \
+                {                                                                \
+                    a[_i] = std::string(prefix) + std::to_string(_i) + (suffix); \
+                }                                                                \
+                return a;                                                        \
+            }();                                                                 \
+            return _cache[(port < 16) ? port : 0];                               \
+        } while (false)
+
+
     // Sensor data
     constexpr auto GYRO = "raccoon/gyro/value";
     constexpr auto ACCELEROMETER = "raccoon/accel/value";
@@ -62,103 +90,103 @@ namespace raccoon::Channels
     // reader's self-loopback (it used to subscribe to its own publishes
     // for ~5 ms of internal latency floor) and aligns servo channels
     // with the established motor convention.
-    inline std::string servoMode(const PortId port)
+    inline const std::string& servoMode(const PortId port)
     {
-        return "raccoon/servo/" + std::to_string(port) + "/mode";
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/mode");
     }
 
     // Servo mode COMMAND — publishers (raccoon-lib LcmDataWriter,
     // botui's disable buttons) write desired mode here; reader's
     // CommandSubscriber listens. Separate from the state channel above
     // so reader does not subscribe to its own publishes.
-    inline std::string servoModeCommand(const PortId port)
+    inline const std::string& servoModeCommand(const PortId port)
     {
-        return "raccoon/servo/" + std::to_string(port) + "/mode_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/mode_cmd");
     }
 
-    inline std::string servoPosition(const PortId port)
+    inline const std::string& servoPosition(const PortId port)
     {
-        return "raccoon/servo/" + std::to_string(port) + "/position";
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/position");
     }
 
-    inline std::string servoPositionCommand(const PortId port)
+    inline const std::string& servoPositionCommand(const PortId port)
     {
-        return "raccoon/servo/" + std::to_string(port) + "/position_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/position_cmd");
     }
 
-    inline std::string servoSmoothPositionCommand(const PortId port)
+    inline const std::string& servoSmoothPositionCommand(const PortId port)
     {
-        return "raccoon/servo/" + std::to_string(port) + "/smooth_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/smooth_cmd");
     }
 
-    inline std::string backEmf(const PortId port)
+    inline const std::string& backEmf(const PortId port)
     {
-        return "raccoon/bemf/" + std::to_string(port) + "/value";
+        RACCOON_CACHED_CHANNEL("raccoon/bemf/", "/value");
     }
 
-    inline std::string analog(const PortId port)
+    inline const std::string& analog(const PortId port)
     {
-        return "raccoon/analog/" + std::to_string(port) + "/value";
+        RACCOON_CACHED_CHANNEL("raccoon/analog/", "/value");
     }
 
-    inline std::string digital(const PortId bit)
+    inline const std::string& digital(const PortId port)
     {
-        return "raccoon/digital/" + std::to_string(bit) + "/value";
+        RACCOON_CACHED_CHANNEL("raccoon/digital/", "/value");
     }
 
-    inline std::string motorPowerCommand(const PortId port)
+    inline const std::string& motorPowerCommand(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/power_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/power_cmd");
     }
 
-    inline std::string motorModeCommand(const PortId port)
+    inline const std::string& motorModeCommand(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/mode_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/mode_cmd");
     }
 
-    inline std::string motorStopCommand(const PortId port)
+    inline const std::string& motorStopCommand(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/stop_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/stop_cmd");
     }
 
-    inline std::string motorVelocityCommand(const PortId port)
+    inline const std::string& motorVelocityCommand(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/velocity_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/velocity_cmd");
     }
 
-    inline std::string motorPositionCommand(const PortId port)
+    inline const std::string& motorPositionCommand(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/position_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/position_cmd");
     }
 
-    inline std::string motorRelativeCommand(const PortId port)
+    inline const std::string& motorRelativeCommand(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/relative_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/relative_cmd");
     }
 
-    inline std::string motorPidCommand(const PortId port)
+    inline const std::string& motorPidCommand(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/pid_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/pid_cmd");
     }
 
-    inline std::string motorPositionResetCommand(const PortId port)
+    inline const std::string& motorPositionResetCommand(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/position_reset_cmd";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/position_reset_cmd");
     }
 
-    inline std::string motorPower(const PortId port)
+    inline const std::string& motorPower(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/power";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/power");
     }
 
-    inline std::string motorPosition(const PortId port)
+    inline const std::string& motorPosition(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/position";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/position");
     }
 
-    inline std::string motorDone(const PortId port)
+    inline const std::string& motorDone(const PortId port)
     {
-        return "raccoon/motor/" + std::to_string(port) + "/done";
+        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/done");
     }
 
     // Protocol channels (internal)
