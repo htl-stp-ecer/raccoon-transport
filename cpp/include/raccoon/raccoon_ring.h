@@ -166,6 +166,37 @@ int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
                               rrb_multi_handler cb, void* user,
                               int timeout_us);
 
+// Variant of rrb_reader_recv_wait_many that ALSO parks on an external
+// "control" uint32_t futex word. The wait returns as soon as ANY of:
+//   * a producer publishes on a watched channel
+//   * the control word value differs from `control_expected`
+//   * `timeout_us` microseconds elapse
+//   * the thread is interrupted by a signal
+//
+// `control` must point to a `_Atomic uint32_t` in MAP_SHARED memory OR
+// in the same process as the wakers; callers wake it with
+// `atomic_fetch_add_explicit(control, 1, release)` followed by a
+// FUTEX_WAKE on the same address. `control_expected` is the value the
+// caller snapshotted BEFORE any work that could be observed by the
+// wake side (e.g. before swapping in a new subscriber list), so the
+// futex_waitv's atomic-compare semantics catch a wake that arrived
+// during snapshotting.
+//
+// Pass `control == NULL` to fall back to plain rrb_reader_recv_wait_many
+// behaviour (no control entry, channels only).
+//
+// Returns identically to rrb_reader_recv_wait_many: number of frames
+// delivered (0 on timeout / control-only wake), -1 on error.
+// NB: the `control` pointer must point to a `_Atomic uint32_t` in C, or
+// `std::atomic<uint32_t>` in C++. We declare it as `uint32_t*` in the
+// header to avoid mixing _Atomic (C) and std::atomic (C++); the
+// implementation uses C11 atomics on the address regardless.
+int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t n,
+                                           uint32_t* control,
+                                           uint32_t control_expected,
+                                           rrb_multi_handler cb, void* user,
+                                           int timeout_us);
+
 void rrb_reader_close(rrb_reader_t* r);
 
 // ---- Utilities for tests + diagnostics ---------------------------------

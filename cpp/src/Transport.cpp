@@ -33,6 +33,10 @@
 #include "raccoon/Channels.h"
 #include "raccoon/raccoon_ring.h"
 
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -89,6 +93,14 @@ namespace raccoon
         // Coarse mutex protects every Impl mutation. Recursive so a
         // callback that publishes back does not deadlock.
         std::recursive_mutex apiMutex;
+
+        // Pure event-driven spin loop: the spin thread parks on
+        // futex_waitv across (a) every subscriber's wake_seq AND
+        // (b) this control word. Subscribe / unsubscribe / shutdown
+        // bump controlSeq + FUTEX_WAKE so the spin thread re-snapshots
+        // its subscriber list (or notices the stop request) without any
+        // periodic polling. Bumped via Transport::wakeControl().
+        std::atomic<uint32_t> controlSeq{0};
 
         // ---- Stats (mostly unchanged from the iceoryx2 version) -------
         struct ChannelStatsAccumulator
@@ -275,10 +287,20 @@ namespace raccoon
                                  const SubscribeOptions& /*options*/)
     {
         if (!impl_ || !impl_->isAlive() || !handler) return false;
-        std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
-        auto* sub = impl_->subscriberFor(channel);
-        if (!sub) return false;
-        sub->handlers.push_back(std::move(handler));
+        bool fresh_channel = false;
+        {
+            std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+            const size_t pre = impl_->subscribers.size();
+            auto* sub = impl_->subscriberFor(channel);
+            if (!sub) return false;
+            sub->handlers.push_back(std::move(handler));
+            fresh_channel = (impl_->subscribers.size() > pre);
+        }
+        // If a NEW channel was opened, the spin thread's waitv list no
+        // longer reflects reality — wake it so it re-snapshots and
+        // includes the new reader's wake_seq. Adding only a handler to
+        // an existing channel doesn't need a wake.
+        if (fresh_channel) wakeControl();
         return true;
     }
 
@@ -349,61 +371,80 @@ namespace raccoon
             }
         }
 
-        // Idle path: park on EVERY subscriber's wake_seq at once via
-        // futex_waitv. Wakes within microseconds on the first publish
-        // on ANY channel, then the helper drains every channel with
-        // data before returning so a single wakeup amortises across
-        // bursts. Falls back to a fixed sleep only when there are no
-        // subscribers at all.
-        if (delivered == 0)
+        // Idle path: pure event-driven park. The control word goes into
+        // the futex_waitv list alongside every subscriber's wake_seq.
+        // Wakes within microseconds on ANY publish OR on a wakeControl()
+        // call from subscribe / shutdown / stop. The `timeoutMs`
+        // argument is now a watchdog upper bound — a sane caller passes
+        // something on the order of seconds; the thread does NOT poll
+        // and does NOT wake periodically otherwise.
+        //
+        // timeoutMs == 0 keeps `spinOnce` non-blocking: return immediately
+        // after the pass-1 drain. This preserves the historical contract
+        // for callers that only want to flush pending frames once
+        // (tests, manual ticks).
+        if (delivered == 0 && timeoutMs > 0)
         {
-            int timeoutUs = (timeoutMs > 0 && timeoutMs < 100)
-                              ? timeoutMs * 1000 : kSpinIdleSleepMs * 1000;
-            if (!subsSnapshot.empty())
+            int timeoutUs = timeoutMs * 1000;
+            uint32_t controlExpected =
+                impl_->controlSeq.load(std::memory_order_acquire);
+
+            struct MultiCtx {
+                Transport* t;
+                Impl::SubEntry** entries;
+                int* delivered_out;
+            };
+            std::vector<Impl::SubEntry*> entries(subsSnapshot);
+            std::vector<rrb_reader_t*> readers;
+            readers.reserve(entries.size());
             {
-                struct MultiCtx {
-                    Transport* t;
-                    Impl::SubEntry** entries;
-                    int* delivered_out;
-                };
-                std::vector<Impl::SubEntry*> entries(subsSnapshot);
-                std::vector<rrb_reader_t*> readers;
-                readers.reserve(entries.size());
+                std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+                if (!impl_->isAlive()) return delivered;
+                for (auto* e : entries) readers.push_back(e->reader);
+            }
+            MultiCtx ctx{this, entries.data(), &delivered};
+            auto cb = [](size_t idx, const void* data, size_t len,
+                         void* user) -> int {
+                auto* c = static_cast<MultiCtx*>(user);
+                Impl::SubEntry* sub = c->entries[idx];
+                int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                int64_t msgUs = Impl::readTimestampBE(data, (int)len);
+                if (msgUs > 0)
+                    c->t->recordLatency(sub->channel, nowUs - msgUs);
+                std::vector<Transport::RawHandler> handlersCopy;
                 {
-                    std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
-                    if (!impl_->isAlive()) return delivered;
-                    for (auto* e : entries) readers.push_back(e->reader);
+                    // recordLatency takes its own lock; handler list
+                    // copy needs apiMutex.
+                    handlersCopy = sub->handlers;
                 }
-                MultiCtx ctx{this, entries.data(), &delivered};
-                auto cb = [](size_t idx, const void* data, size_t len,
-                             void* user) -> int {
-                    auto* c = static_cast<MultiCtx*>(user);
-                    Impl::SubEntry* sub = c->entries[idx];
-                    int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
-                    int64_t msgUs = Impl::readTimestampBE(data, (int)len);
-                    if (msgUs > 0)
-                        c->t->recordLatency(sub->channel, nowUs - msgUs);
-                    std::vector<Transport::RawHandler> handlersCopy;
-                    {
-                        // recordLatency takes its own lock; handler list
-                        // copy needs apiMutex.
-                        handlersCopy = sub->handlers;
-                    }
-                    for (auto& h : handlersCopy) {
-                        try { h(data, (int)len); }
-                        catch (...) {}
-                    }
-                    ++(*c->delivered_out);
-                    return 0;
+                for (auto& h : handlersCopy) {
+                    try { h(data, (int)len); }
+                    catch (...) {}
+                }
+                ++(*c->delivered_out);
+                return 0;
+            };
+            if (readers.empty())
+            {
+                // Only the control word to park on. recv_wait_many's
+                // contract requires n >= 1 readers, so we hand-park
+                // on the control futex directly using a private
+                // futex_wait — equivalent semantics, no readers needed.
+                struct timespec ts = {
+                    timeoutUs / 1000000,
+                    (long)(timeoutUs % 1000000) * 1000L,
                 };
-                (void)rrb_reader_recv_wait_many(
-                    readers.data(), readers.size(),
-                    cb, &ctx, timeoutUs);
+                (void)syscall(SYS_futex, &impl_->controlSeq, FUTEX_WAIT,
+                              controlExpected, &ts, nullptr, 0);
             }
             else
             {
-                std::this_thread::sleep_for(std::chrono::microseconds(timeoutUs));
+                (void)rrb_reader_recv_wait_many_with_control(
+                    readers.data(), readers.size(),
+                    reinterpret_cast<uint32_t*>(&impl_->controlSeq),
+                    controlExpected,
+                    cb, &ctx, timeoutUs);
             }
         }
 
@@ -425,11 +466,32 @@ namespace raccoon
     void Transport::stop()
     {
         if (impl_) impl_->running.store(false);
+        wakeControl();  // unblock any thread parked in spinOnce
     }
 
     void Transport::shutdown()
     {
-        if (impl_) impl_->shutdown();
+        if (!impl_) return;
+        impl_->shutdown();
+        // wakeControl() works even after shutdown — the controlSeq lives
+        // in Impl, which we still own, and the futex word doesn't care.
+        // Without this, anyone still parked in spinOnce would wait up to
+        // the watchdog timeout (1 s) for their wait to expire.
+        wakeControl();
+    }
+
+    void Transport::wakeControl()
+    {
+        if (!impl_) return;
+        // Bump the value (release-ordered against any state the waker
+        // wants the spin thread to observe — running flag, subscriber
+        // list, etc.) then FUTEX_WAKE so a parked spin thread exits its
+        // wait immediately. The waker side never blocks: FUTEX_WAKE on
+        // a word with no waiters is a ~50 ns no-op.
+        std::atomic_fetch_add_explicit(&impl_->controlSeq, uint32_t{1},
+                                       std::memory_order_release);
+        syscall(SYS_futex, &impl_->controlSeq, FUTEX_WAKE, INT_MAX,
+                nullptr, nullptr, 0);
     }
 
     bool Transport::is_alive() const noexcept

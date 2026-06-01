@@ -168,6 +168,18 @@ namespace raccoon
         void stop();
 
         /**
+         * Wake any thread parked inside `spinOnce`. The spin thread parks
+         * in a futex_waitv across every subscriber's wake_seq plus an
+         * internal control word; calling `wakeControl()` bumps the
+         * control word and issues a FUTEX_WAKE so the spinning thread
+         * exits the wait immediately, re-snapshots its subscriber list,
+         * and checks any external stop signal. Use this whenever the
+         * set of subscribers changes or the spin loop needs to observe
+         * an external state change without polling.
+         */
+        void wakeControl();
+
+        /**
          * Tear down the iceoryx2 Node and all lazy publisher/subscriber
          * ports NOW, while the host process and iceoryx2 globals are still
          * alive. Required to avoid a static-destruction-order SIGSEGV: the

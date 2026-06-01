@@ -598,7 +598,20 @@ int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
 int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
                               rrb_multi_handler cb, void* user,
                               int timeout_us) {
-    if (!readers || !cb || n == 0 || n > 128) return -1;
+    return rrb_reader_recv_wait_many_with_control(readers, n, NULL, 0,
+                                                  cb, user, timeout_us);
+}
+
+int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t n,
+                                           uint32_t* control,
+                                           uint32_t control_expected,
+                                           rrb_multi_handler cb, void* user,
+                                           int timeout_us) {
+    // 128 is the kernel's futex_waitv cap. We need 1 slot for the optional
+    // control entry, so channels can use up to 127 when control is set.
+    if (!readers || !cb || n == 0) return -1;
+    const size_t max_channels = control ? 127 : 128;
+    if (n > max_channels) return -1;
 
     // Tiny scratch buffer used by the drain loop — sized to RRB_DEFAULT
     // for the common case and grown to the largest ring's max_payload
@@ -639,7 +652,10 @@ int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
     // Pass 2: build the waitv list and park. Only readers that are
     // attached and whose wake_seq is observable get added; un-attached
     // ones (file doesn't exist yet) skip the wait and are caught by
-    // the next caller's pass 1.
+    // the next caller's pass 1. Optional control word goes in last so
+    // the caller can identify a "wake came from control, not a
+    // channel" event by re-reading *control and comparing to
+    // control_expected.
     struct rrb_futex_waitv waiters[128];
     size_t nw = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -652,9 +668,17 @@ int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
         waiters[nw].__reserved = 0;
         ++nw;
     }
+    if (control) {
+        waiters[nw].val = control_expected;
+        waiters[nw].uaddr = (uint64_t)(uintptr_t)control;
+        waiters[nw].flags = FUTEX2_SIZE_U32;
+        waiters[nw].__reserved = 0;
+        ++nw;
+    }
     if (nw == 0) {
-        // No attached readers — fall back to a plain sleep so the caller
-        // doesn't burn a CPU spinning on the empty list.
+        // No attached readers AND no control entry — fall back to a
+        // plain sleep so the caller doesn't burn a CPU spinning on
+        // the empty list.
         struct timespec sleep_ts = {
             timeout_us / 1000000,
             (long)(timeout_us % 1000000) * 1000L,
