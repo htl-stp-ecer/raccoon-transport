@@ -1,9 +1,9 @@
 #pragma once
 
-#include <raccoon/scalar_f_t.hpp>
-#include <raccoon/scalar_i32_t.hpp>
-#include <raccoon/vector3f_t.hpp>
-#include <raccoon/string_t.hpp>
+#include "raccoon/scalar_f_t.hpp"
+#include "raccoon/scalar_i32_t.hpp"
+#include "raccoon/string_t.hpp"
+#include "raccoon/vector3f_t.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -167,9 +167,10 @@ inline std::vector<uint8_t> hexToBytes(const std::string& hex) {
 
 template <typename T>
 inline std::vector<uint8_t> encodeMsg(const T& msg) {
-    int maxLen = msg.getEncodedSize();
+    int maxLen = msg.encoded_size();
     std::vector<uint8_t> buf(maxLen);
-    msg.encode(buf.data(), 0, maxLen);
+    int written = msg.encode(buf.data(), maxLen);
+    buf.resize(static_cast<size_t>(written < 0 ? 0 : written));
     return buf;
 }
 
@@ -209,38 +210,26 @@ inline std::string messageToJson(const std::string& type, const void* data,
                                  int dataLen) {
     if (type == "scalar_f_t") {
         raccoon::scalar_f_t msg{};
-        msg.decode(data, 0, dataLen);
+        msg.decode(static_cast<const uint8_t*>(data), dataLen);
         return "{\"timestamp\":" + std::to_string(msg.timestamp) +
                ",\"value\":" + formatFloat(msg.value) + "}";
     } else if (type == "scalar_i32_t") {
         raccoon::scalar_i32_t msg{};
-        msg.decode(data, 0, dataLen);
+        msg.decode(static_cast<const uint8_t*>(data), dataLen);
         return "{\"timestamp\":" + std::to_string(msg.timestamp) +
                ",\"value\":" + std::to_string(msg.value) + "}";
     } else if (type == "vector3f_t") {
         raccoon::vector3f_t msg{};
-        msg.decode(data, 0, dataLen);
+        msg.decode(static_cast<const uint8_t*>(data), dataLen);
         return "{\"timestamp\":" + std::to_string(msg.timestamp) +
                ",\"x\":" + formatFloat(msg.x) +
                ",\"y\":" + formatFloat(msg.y) +
                ",\"z\":" + formatFloat(msg.z) + "}";
     } else if (type == "string_t") {
         raccoon::string_t msg{};
-        msg.decode(data, 0, dataLen);
+        msg.decode(static_cast<const uint8_t*>(data), dataLen);
         return "{\"timestamp\":" + std::to_string(msg.timestamp) +
                ",\"value\":\"" + escapeJsonString(msg.value) + "\"}";
     }
-    throw std::runtime_error("Unknown type: " + type);
-}
-
-// ============================================================================
-// Fingerprint retrieval
-// ============================================================================
-
-inline int64_t getFingerprint(const std::string& type) {
-    if (type == "scalar_f_t")   return raccoon::scalar_f_t::getHash();
-    if (type == "scalar_i32_t") return raccoon::scalar_i32_t::getHash();
-    if (type == "vector3f_t")   return raccoon::vector3f_t::getHash();
-    if (type == "string_t")     return raccoon::string_t::getHash();
     throw std::runtime_error("Unknown type: " + type);
 }

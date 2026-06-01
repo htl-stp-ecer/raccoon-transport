@@ -1,7 +1,0 @@
-package exlcm;
-
-struct string_t
-{
-    int64_t timestamp;
-    string value;
-}

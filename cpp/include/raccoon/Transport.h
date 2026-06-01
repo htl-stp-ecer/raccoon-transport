@@ -58,10 +58,11 @@ namespace raccoon
     };
 
     /**
-     * Typed wrapper around LCM with optional reliable and retained delivery.
+     * Typed wrapper around the shared-memory transport with optional
+     * reliable and retained delivery flags preserved for API compatibility.
      *
      * The implementation is hidden behind a PIMPL. Public users interact
-     * through typed `publish<T>()` and `subscribe<T>()` helpers or their raw
+         * through typed `publish<T>()` and `subscribe<T>()` helpers or their raw
      * equivalents when a message type is not available at compile time.
      *
      * Thread safety: every public method is safe to call from any thread.
@@ -99,13 +100,13 @@ namespace raccoon
         bool subscribeRaw(const std::string& channel, RawHandler handler,
                           const SubscribeOptions& options = {});
 
-        template <LcmMessage T>
+        template <TransportMessage T>
         bool publish(const std::string& channel, const T& message,
                      const PublishOptions& options = {})
         {
             // Auto-stamp the timestamp if the caller left it at the default 0.
-            // Every raccoon LCM type carries a `timestamp` field (see the
-            // `LcmMessage` concept) and downstream consumers dedupe by it;
+            // Every raccoon message type carries a `timestamp` field and
+            // downstream consumers dedupe by it;
             // forcing every caller to set the timestamp manually has proven
             // to be a reliable foot-gun. Non-zero values are left alone so
             // replay / test / explicit-timestamp use cases keep working.
@@ -116,26 +117,26 @@ namespace raccoon
                     std::chrono::system_clock::now().time_since_epoch()).count();
             }
 
-            int maxLen = stamped.getEncodedSize();
+            int maxLen = stamped.encoded_size();
             std::vector<uint8_t> buf(maxLen);
-            int encodedLen = stamped.encode(buf.data(), 0, maxLen);
+            int encodedLen = stamped.encode(buf.data(), maxLen);
             if (encodedLen < 0) return false;
             return publishRaw(channel, buf.data(), encodedLen, options);
         }
 
-        template <LcmMessage T>
+        template <TransportMessage T>
         bool subscribe(const std::string& channel,
                        std::function<void(const T &)> handler,
                        const SubscribeOptions& options = {})
         {
-            return subscribeRaw(channel, [this, channel, handler](const void* data, int dataLen)
+            return subscribeRaw(channel, [handler](const void* data, int dataLen)
             {
+                // Latency stats are recorded once per frame in spinOnce's
+                // raw-path drain — see Transport.cpp's readTimestampBE +
+                // recordLatency call. Recording it again here double-counts.
                 T msg;
-                if (msg.decode(data, 0, dataLen) >= 0)
+                if (msg.decode(static_cast<const uint8_t*>(data), dataLen) >= 0)
                 {
-                    auto nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
-                    recordLatency(channel, nowUs - msg.timestamp);
                     handler(msg);
                 }
             }, options);
