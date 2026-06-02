@@ -497,12 +497,20 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
     if (!r || !buf || !out_len) return -1;
     *out_len = 0;
 
-    // Lazy attach if the producer hadn't materialised the file yet.
-    if (!r->base) {
-        if (reader_attach(r) != 0) return 1;
-    }
-
     for (int attempt = 0; attempt < 8; ++attempt) {
+        // Defensive guard: r->hdr can be NULL on entry (lazy reader before
+        // any producer materialised) or after a previous loop iteration's
+        // reader_reopen_if_unlinked() detached and failed to re-attach
+        // (producer was unlinked AND not yet recreated, or recreated with
+        // a bad header that fails the magic check). Without this guard,
+        // every r->hdr dereference below SEGVs — verified on production
+        // Pi 2026-06-02 (SIGSEGV at rrb_reader_recv +0x884bc on AArch64
+        // loading r->hdr->slot_count via NULL ptr). Reproducer:
+        // tests/test_reader_recv_robust.cpp.
+        if (!r->base || !r->hdr) {
+            if (reader_attach(r) != 0) return 1;
+        }
+
         uint64_t producer = atomic_load_explicit(&r->hdr->producer_seq,
                                                  memory_order_acquire);
         if (producer == r->last_seen) {
@@ -510,10 +518,9 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
             // and replaced since we last attached — if so, re-attach so
             // the next poll sees the fresh inode.
             reader_reopen_if_unlinked(r);
-            if (r->base) {
-                producer = atomic_load_explicit(&r->hdr->producer_seq,
-                                                memory_order_acquire);
-            }
+            if (!r->base || !r->hdr) return 1;  // detached + reattach failed → bail
+            producer = atomic_load_explicit(&r->hdr->producer_seq,
+                                            memory_order_acquire);
             if (producer == r->last_seen) return 1;
         }
 
