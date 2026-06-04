@@ -427,6 +427,31 @@ static int reader_attach(rrb_reader_t* r) {
     return 0;
 }
 
+int rrb_reader_seek_to_latest(rrb_reader_t* r) {
+    if (!r) return -1;
+    if (!r->base) {
+        int rc = reader_attach(r);
+        if (rc != 0) return rc;
+    }
+    // Retain-on-attach: deliver the LAST published frame on the next
+    // recv() instead of walking the ring from the oldest still-intact
+    // slot. Without this, a fresh subscriber on a slow / dedup'd channel
+    // (e.g. raccoon/imu/heading while the robot sits still — the reader
+    // drops near-duplicate floats so no fresh publish arrives for
+    // seconds) wedges callers like Platform.cpp's waitForImuReady, which
+    // gives up after a 1.5 s timeout even though a perfectly good cached
+    // frame already lives in the ring.
+    //
+    // Producer-restart safety: if producer_seq later resets to a value
+    // < last_seen (rrb_writer_create re-initialised the ring in place),
+    // recv's existing `producer < last_seen → last_seen = 0` branch
+    // catches it and we replay from the start of the new epoch.
+    uint64_t prod = atomic_load_explicit(&r->hdr->producer_seq,
+                                        memory_order_acquire);
+    r->last_seen = (prod > 0) ? (prod - 1) : 0;
+    return 0;
+}
+
 // Check whether the underlying SHM file has been unlinked (st_nlink == 0)
 // and, if a replacement file exists at the same path, detach from the
 // orphaned mmap and re-attach to the fresh inode. Returns 0 if still

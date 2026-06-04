@@ -197,6 +197,18 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
                                            rrb_multi_handler cb, void* user,
                                            int timeout_us);
 
+// Mark the reader so its NEXT rrb_reader_recv() call returns the most
+// recently published frame in the ring (if any), instead of walking
+// from the oldest still-intact slot. Use this to implement
+// "retain-on-attach" / latest-value-on-subscribe semantics for fresh
+// subscribers on slow- or dedup-filtered channels where waiting for a
+// brand-new publish would block longer than the caller's timeout.
+//
+// No-op when the producer has not yet materialised the SHM file
+// (returns 0 — the next recv() lazy-attaches and finds an empty ring).
+// Returns -1 only on invalid handle.
+int rrb_reader_seek_to_latest(rrb_reader_t* r);
+
 void rrb_reader_close(rrb_reader_t* r);
 
 // ---- Utilities for tests + diagnostics ---------------------------------

@@ -284,7 +284,7 @@ namespace raccoon
     }
 
     bool Transport::subscribeRaw(const std::string& channel, RawHandler handler,
-                                 const SubscribeOptions& /*options*/)
+                                 const SubscribeOptions& options)
     {
         if (!impl_ || !impl_->isAlive() || !handler) return false;
         bool fresh_channel = false;
@@ -295,6 +295,15 @@ namespace raccoon
             if (!sub) return false;
             sub->handlers.push_back(std::move(handler));
             fresh_channel = (impl_->subscribers.size() > pre);
+            // Retain-on-attach: if the caller asked for the latest cached
+            // frame AND this is a fresh underlying subscriber (no prior
+            // handler already drained the ring), seek the reader to the
+            // last published seq so the next recv() hands out the cached
+            // frame instead of walking from the oldest slot. Only fires
+            // for fresh_channel — reusing an existing reader would
+            // re-deliver an already-dispatched frame to other handlers.
+            if (fresh_channel && options.requestRetained)
+                rrb_reader_seek_to_latest(sub->reader);
         }
         // If a NEW channel was opened, the spin thread's waitv list no
         // longer reflects reality — wake it so it re-snapshots and
