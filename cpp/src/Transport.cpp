@@ -1,65 +1,45 @@
-// raccoon::Transport — iceoryx2 backend.
+// Transport.cpp — raccoon::Transport backed by the in-tree raccoon_ring
+// SHM library.
 //
-// History: this used to be a thin wrapper around lcm::LCM that ran the
-// pub/sub bytes over UDP multicast on the loopback interface. On a Pi 3B
-// that collapsed under the production load (25k pkts/s × 3+ subscribers ⇒
-// 55 % packet loss, 200 % CPU). The benchmark in raccoon-lib's history
-// commit shows iceoryx2 holding the same load at 0 % loss / 68 % CPU.
+// History: this used to wrap iceoryx2 v0.9.999-dev. That backend proved
+// unreliable in our deployed setup (Pi with stm32-data-reader publishing
+// ~100 sensor channels) — every new iceoryx2 process on the host would
+// fail at NodeBuilder::create with InternalError, and even when subscribes
+// nominally succeeded, frames did not always reach the subscriber. We
+// replaced the backend with raccoon_ring: one /dev/shm file per channel,
+// single-producer multi-consumer ring with a per-slot SeqLock. Same
+// raccoon::Transport public API (publish/subscribe/spinOnce/...), no
+// caller-side changes anywhere in the codebase.
 //
-// The wire format (LCM-generated encode/decode bytes for each message
-// type) is unchanged — those bytes are now shipped through an iceoryx2
-// shared-memory pub/sub service per channel instead of through LCM UDP.
-// The public API surface (publish<T>, subscribe<T>, publishRaw,
-// subscribeRaw, spinOnce, spin, getAndResetStats) is unchanged.
+// Threading model:
+//   * one recursive mutex guards the per-channel writer/subscriber maps
+//   * rrb_writer / rrb_reader instances themselves are NOT thread-safe;
+//     all calls happen inside the mutex
+//   * publishRaw is allowed from any thread (mutex serialises into the
+//     single-producer ring writer — fine, raccoon_ring is documented as
+//     SPMC; a serialised SPSC chain is equivalent)
+//   * subscribeRaw registers a handler; spinOnce polls each subscriber's
+//     ring under the mutex, releases the mutex around each handler call
+//     so a slow handler does not block unrelated transport ops
 //
-// Behavior changes versus the LCM backend (intentional):
-//
-//   * `PublishOptions::reliable` is silently ignored. LCM needed an
-//     at-least-once retry protocol because UDP-multicast on loopback
-//     dropped packets under load (the 638 RcvbufErrors that triggered
-//     this migration in the first place). iceoryx2 routes through
-//     shared memory, so kernel-level drops don't exist; the only
-//     remaining loss source is a subscriber-queue overflow, which the
-//     buffer_size=64 + retain-1 below already prevents for the command
-//     channels that ever set `reliable=true` (motor mode_cmd,
-//     servo smooth_cmd, kinematics_config_cmd, …). The old reliable
-//     warning was removed because the no-op is now the *correct* behavior.
-//
-//   * `history_size=1` on every service, regardless of
-//     `PublishOptions::retained` — cheap and removes the old
-//     RETAIN_REQUEST control-channel handshake entirely.
-//     Semantic caveat: iceoryx2 history is publisher-side. A late
-//     subscriber receives the historical sample on the publisher's
-//     NEXT send(). If the publisher has died or is idle, no replay
-//     happens. This is acceptable for raccoon's actual usage pattern
-//     — sensor streams keep publishing, and command consumers
-//     (stm32 CommandSubscriber) are always running before commands
-//     fly. If a future caller needs durable cross-process retention,
-//     we'd need either a long-lived "retain daemon" node or a flat
-//     file mirror — both are out of scope here.
-//
-//   * Payload is a dynamic-size iceoryx2 `bb::Slice<uint8_t>`. Every
-//     publish allocates exactly `dataLen` bytes from the publisher's
-//     SHM pool, growing the pool in PowerOfTwo steps from a 4 KB
-//     starting hint. cam_frame_t / screen_render_t / yolo_frame_t fit
-//     fine; small scalar messages don't waste a fixed slot anymore.
+// Latency stats are computed from the LCM message timestamp where present.
+// raccoon_ring delivers raw bytes; we sniff the first 8 bytes as a big-
+// endian int64 microseconds-since-epoch, matching every raccoon LCM type's
+// `timestamp` field layout. If the message is shorter than 8 bytes we
+// just don't record latency for it.
+
 #include "raccoon/Transport.h"
+
 #include "raccoon/Channels.h"
+#include "raccoon/raccoon_ring.h"
 
-#include "iox2/iceoryx2.hpp"
-
-// Suppress our own deprecation warning on `reliable` / `retryInterval` /
-// `maxRetries` — this file is the place that *forwards* the value into
-// a no-op, which is exactly what the deprecation tells external callers
-// to stop doing. Internal pass-through is fine.
-#if defined(__GNUC__) || defined(__clang__)
-#  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -70,76 +50,59 @@
 #include <unordered_map>
 #include <vector>
 
+// The legacy reliable/retry/retain flags are kept on PublishOptions and
+// SubscribeOptions for API compatibility but the SHM backend ignores them.
+// Suppress the deprecation warning on our own pass-through reads.
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 namespace raccoon
 {
-    // The wire payload is a dynamic-size byte slice (iceoryx2 `bb::Slice<uint8_t>`).
-    // Each publish allocates exactly the message size; the publisher's SHM
-    // pool grows in PowerOfTwo steps from this starting hint. Sized so the
-    // common scalar/vector LCM messages (≤ ~64 B encoded) fit without realloc;
-    // larger payloads (cam_frame_t, screen_render_t) trigger one or two
-    // PowerOfTwo doublings.
-    static constexpr uint64_t kInitialSliceHint = 4096;
-
-    using IoxPayload = iox2::bb::Slice<uint8_t>;
-    using IoxNode = iox2::Node<iox2::ServiceType::Ipc>;
-    using IoxService = iox2::PortFactoryPublishSubscribe<iox2::ServiceType::Ipc, IoxPayload, void>;
-    using IoxPublisher = iox2::Publisher<iox2::ServiceType::Ipc, IoxPayload, void>;
-    using IoxSubscriber = iox2::Subscriber<iox2::ServiceType::Ipc, IoxPayload, void>;
-
-    static int64_t percentile99(std::vector<int64_t> samples)
+    namespace
     {
-        if (samples.empty()) return 0;
-        const auto index = static_cast<size_t>(
-            std::ceil(static_cast<double>(samples.size()) * 0.99)) - 1;
-        const auto nth = std::min(index, samples.size() - 1);
-        std::nth_element(samples.begin(),
-                         samples.begin() + static_cast<std::ptrdiff_t>(nth),
-                         samples.end());
-        return samples[nth];
-    }
-
-    // iceoryx2 service names share LCM's channel naming (slash-separated).
-    // Empty names and control characters are rejected by iceoryx2; we let
-    // those propagate as failed-publish so the caller sees the bad name.
-    static iox2::ServiceName makeServiceName(const std::string& channel)
-    {
-        return iox2::ServiceName::create(channel.c_str()).value();
+        constexpr int kSpinIdleSleepMs = 1;
     }
 
     class Transport::Impl
     {
     public:
-        std::unique_ptr<IoxNode> node;
-        std::atomic<bool> running{false};
+        // We carry an "alive" flag so shutdown() can be called explicitly
+        // before the destructor (the Python atexit path needs this) and
+        // subsequent publishes become safe no-ops.
+        std::atomic<bool> running{true};
 
         struct PubEntry
         {
-            std::unique_ptr<IoxService> service;
-            std::unique_ptr<IoxPublisher> publisher;
+            rrb_writer_t* writer = nullptr;
         };
-
         struct SubEntry
         {
             std::string channel;
-            bool retained{false};
-            std::unique_ptr<IoxService> service;
-            std::unique_ptr<IoxSubscriber> subscriber;
+            rrb_reader_t* reader = nullptr;
             std::vector<Transport::RawHandler> handlers;
+            // Per-channel scratch buffer for the receive copy. Sized at
+            // RRB_DEFAULT_MAX_PAYLOAD; if any channel ends up needing
+            // larger we grow it lazily.
+            std::vector<uint8_t> scratch;
         };
 
-        std::unordered_map<std::string, PubEntry> publishers;
-        std::vector<std::unique_ptr<SubEntry>> subscribers;
+        std::unordered_map<std::string, PubEntry>   publishers;
+        std::vector<std::unique_ptr<SubEntry>>      subscribers;
 
-        // Deduplication cache (unchanged from LCM version).
-        std::unordered_map<std::string, std::vector<uint8_t>> deduplicationCache;
-
-        // One coarse mutex protects every Impl mutation. We do not run iceoryx2
-        // pub/sub ports from multiple threads — that would be racy per the
-        // iceoryx2 contract — so this mutex doubles as the per-port serialiser.
-        // Recursive so a callback that publishes back does not deadlock.
+        // Coarse mutex protects every Impl mutation. Recursive so a
+        // callback that publishes back does not deadlock.
         std::recursive_mutex apiMutex;
 
-        // ---- Stats ---------------------------------------------------------
+        // Pure event-driven spin loop: the spin thread parks on
+        // futex_waitv across (a) every subscriber's wake_seq AND
+        // (b) this control word. Subscribe / unsubscribe / shutdown
+        // bump controlSeq + FUTEX_WAKE so the spin thread re-snapshots
+        // its subscriber list (or notices the stop request) without any
+        // periodic polling. Bumped via Transport::wakeControl().
+        std::atomic<uint32_t> controlSeq{0};
+
+        // ---- Stats (mostly unchanged from the iceoryx2 version) -------
         struct ChannelStatsAccumulator
         {
             uint64_t deliveries{0};
@@ -147,19 +110,16 @@ namespace raccoon
             int64_t latencyMaxUs{0};
             int64_t latencySumUs{0};
             uint64_t latencyCount{0};
-            std::vector<int64_t> latencySamplesUs{};
             int64_t callbackMinUs{std::numeric_limits<int64_t>::max()};
             int64_t callbackMaxUs{0};
             int64_t callbackSumUs{0};
             uint64_t callbackCount{0};
         };
-
         std::mutex statsMutex;
         int64_t latencyMinUs{std::numeric_limits<int64_t>::max()};
         int64_t latencyMaxUs{0};
         int64_t latencySumUs{0};
         uint64_t latencyCount{0};
-        std::vector<int64_t> latencySamplesUs{};
         int64_t callbackMinUs{std::numeric_limits<int64_t>::max()};
         int64_t callbackMaxUs{0};
         int64_t callbackSumUs{0};
@@ -170,227 +130,119 @@ namespace raccoon
         uint64_t spinCount{0};
         uint64_t spinActiveCount{0};
         uint64_t spinIdleCount{0};
-        uint64_t publishesDeduplicated{0};
         std::unordered_map<std::string, ChannelStatsAccumulator> channelStats;
 
-        explicit Impl(const std::string& /*provider*/)
+        explicit Impl(const std::string& /*provider*/) {}
+
+        ~Impl() { shutdown(); }
+
+        void shutdown()
         {
-            // iceoryx2 does not have a "provider URL" concept; the parameter
-            // is kept for API compatibility with the old LCM signature.
-            node = std::make_unique<IoxNode>(
-                iox2::NodeBuilder().create<iox2::ServiceType::Ipc>()
-                                   .value());
+            if (!running.exchange(false)) return;
+            std::lock_guard<std::recursive_mutex> lk(apiMutex);
+            for (auto& [ch, pe] : publishers)
+            {
+                if (pe.writer) rrb_writer_destroy(pe.writer);
+            }
+            publishers.clear();
+            for (auto& sub : subscribers)
+            {
+                if (sub->reader) rrb_reader_close(sub->reader);
+            }
+            subscribers.clear();
         }
 
-        bool initialize() const { return node != nullptr; }
+        bool isAlive() const noexcept { return running.load(); }
 
-        // Get-or-create a publisher port for the given channel. Returns
-        // nullptr on failure (e.g. invalid channel name). All calls into
-        // iceoryx2 must hold apiMutex.
-        IoxPublisher* publisherFor(const std::string& channel,
-                                   [[maybe_unused]] bool retained)
+        // Get-or-create a publisher writer for the channel. The first
+        // publish carries a `size_hint` so we can size the ring to the
+        // caller's actual payload size instead of paying the worst-case
+        // for every channel.
+        //
+        // Sizing policy: aim for ~128 KiB total ring memory per channel,
+        // with at least 4 slots of history and enough slot bytes to fit
+        // up to 2× the first-seen payload. Keeps small sensor channels
+        // cheap (~128 KiB) while letting camera-frame channels (256 KiB+
+        // payloads) round-trip without TruncationError.
+        //
+        // Returns nullptr if rrb_writer_create rejected the channel name
+        // (bad characters) or could not open /dev/shm — those are hard
+        // configuration errors, not transients.
+        rrb_writer_t* writerFor(const std::string& channel, size_t size_hint)
         {
             auto it = publishers.find(channel);
-            if (it != publishers.end()) return it->second.publisher.get();
+            if (it != publishers.end()) return it->second.writer;
 
-            PubEntry entry{};
-            entry.service = std::make_unique<IoxService>(
-                node->service_builder(makeServiceName(channel))
-                    .publish_subscribe<IoxPayload>()
-                    .max_publishers(8)
-                    .max_subscribers(16)
-                    // Always 1: cheap retain, and crucially the SAME value
-                    // across every open_or_create() of a given service.
-                    // Otherwise the second caller hits
-                    // OpenDoesNotSupportRequestedMinHistorySize when its
-                    // requested minimum is greater than the live history.
-                    .history_size(1)
-                    .subscriber_max_buffer_size(64)
-                    .open_or_create()
-                    .value());
-            entry.publisher = std::make_unique<IoxPublisher>(
-                entry.service->publisher_builder()
-                     // Hint for the SHM allocator. Common case (scalar/vector
-                     // LCM-encoded messages) fits without reallocation; larger
-                     // payloads (cam_frame_t, screen_render_t) trigger
-                     // PowerOfTwo growth to 8K → 16K → … as needed.
-                     .initial_max_slice_len(kInitialSliceHint)
-                     .allocation_strategy(iox2::AllocationStrategy::PowerOfTwo)
-                     .create()
-                     .value());
-            auto* raw = entry.publisher.get();
-            publishers.emplace(channel, std::move(entry));
-            return raw;
+            // Round size_hint UP to a multiple of 256 bytes, double it
+            // for headroom (next sensor frame may be slightly larger),
+            // and clamp at a sane floor.
+            size_t want = (size_hint ? size_hint : 1) * 2;
+            if (want < RRB_DEFAULT_MAX_PAYLOAD) want = RRB_DEFAULT_MAX_PAYLOAD;
+            // round up to 256 bytes
+            want = ((want + 255) / 256) * 256;
+
+            // ~128 KiB ring budget; clamp slot count to [4, 64].
+            size_t slots = (128u * 1024u) / want;
+            if (slots < 4) slots = 4;
+            if (slots > RRB_DEFAULT_SLOT_COUNT) slots = RRB_DEFAULT_SLOT_COUNT;
+
+            rrb_writer_t* w = rrb_writer_create(
+                channel.c_str(),
+                (uint32_t)slots,
+                (uint32_t)want);
+            if (!w)
+            {
+                std::cerr << "raccoon::Transport: rrb_writer_create('"
+                          << channel << "') failed (bad channel name or "
+                                        "/dev/shm not writable)\n";
+                return nullptr;
+            }
+            publishers.emplace(channel, PubEntry{w});
+            return w;
         }
 
-        // Get-or-create a subscriber entry for the channel. Multiple
-        // subscribe() calls on the same channel share one iceoryx2 port and
-        // fan out callbacks at dispatch time.
-        SubEntry* subscriberFor(const std::string& channel, bool requestRetained)
+        SubEntry* subscriberFor(const std::string& channel)
         {
             for (auto& s : subscribers)
             {
                 if (s->channel == channel) return s.get();
             }
+            rrb_reader_t* r = rrb_reader_open(channel.c_str());
+            if (!r)
+            {
+                std::cerr << "raccoon::Transport: rrb_reader_open('"
+                          << channel << "') failed (bad channel name)\n";
+                return nullptr;
+            }
             auto entry = std::make_unique<SubEntry>();
             entry->channel = channel;
-            entry->retained = requestRetained;
-            entry->service = std::make_unique<IoxService>(
-                node->service_builder(makeServiceName(channel))
-                    .publish_subscribe<IoxPayload>()
-                    .max_publishers(8)
-                    .max_subscribers(16)
-                    .history_size(1)
-                    .subscriber_max_buffer_size(64)
-                    .open_or_create()
-                    .value());
-            entry->subscriber = std::make_unique<IoxSubscriber>(
-                entry->service->subscriber_builder()
-                     .buffer_size(64)
-                     .create()
-                     .value());
-            auto* raw = entry.get();
+            entry->reader = r;
+            // Single per-subscriber scratch buffer big enough for any ring
+            // sized by writerFor (up to ~512 KiB for the camera-frame
+            // channels). 512 KB per subscriber is a one-time cost and
+            // avoids per-recv resizing logic.
+            entry->scratch.resize(512u * 1024u);
+            SubEntry* raw = entry.get();
             subscribers.push_back(std::move(entry));
             return raw;
         }
 
-        void recordLatency(const std::string& channel, int64_t us)
+        // Sniff message timestamp from the first 8 bytes (big-endian).
+        // Every raccoon LCM message starts with an `int64_t timestamp`
+        // microseconds-since-epoch field; the encode/decode is big-endian
+        // per the LCM wire spec. Returns 0 if the buffer is too short.
+        static int64_t readTimestampBE(const void* data, int len)
         {
-            std::lock_guard<std::mutex> lock(statsMutex);
-            if (us < 0) return;
-            latencyMinUs = std::min(latencyMinUs, us);
-            latencyMaxUs = std::max(latencyMaxUs, us);
-            latencySumUs += us;
-            ++latencyCount;
-            latencySamplesUs.push_back(us);
-            auto& stats = channelStats[channel];
-            stats.latencyMinUs = std::min(stats.latencyMinUs, us);
-            stats.latencyMaxUs = std::max(stats.latencyMaxUs, us);
-            stats.latencySumUs += us;
-            ++stats.latencyCount;
-            stats.latencySamplesUs.push_back(us);
+            if (len < 8) return 0;
+            const uint8_t* b = static_cast<const uint8_t*>(data);
+            int64_t v = 0;
+            for (int i = 0; i < 8; ++i)
+                v = (v << 8) | b[i];
+            return v;
         }
-
-        void recordCallback(const std::string& channel, int64_t us)
-        {
-            std::lock_guard<std::mutex> lock(statsMutex);
-            if (us < 0) return;
-            callbackMinUs = std::min(callbackMinUs, us);
-            callbackMaxUs = std::max(callbackMaxUs, us);
-            callbackSumUs += us;
-            ++callbackCount;
-            auto& stats = channelStats[channel];
-            ++stats.deliveries;
-            stats.callbackMinUs = std::min(stats.callbackMinUs, us);
-            stats.callbackMaxUs = std::max(stats.callbackMaxUs, us);
-            stats.callbackSumUs += us;
-            ++stats.callbackCount;
-        }
-
-        void recordSpin(int result, int64_t us)
-        {
-            std::lock_guard<std::mutex> lock(statsMutex);
-            if (us >= 0)
-            {
-                spinMinUs = std::min(spinMinUs, us);
-                spinMaxUs = std::max(spinMaxUs, us);
-                spinSumUs += us;
-                ++spinCount;
-            }
-            if (result > 0) ++spinActiveCount;
-            else if (result == 0) ++spinIdleCount;
-        }
-
-        TransportStats getAndResetStats()
-        {
-            std::lock_guard<std::mutex> lock(statsMutex);
-            TransportStats stats{};
-            stats.publishesDeduplicated = publishesDeduplicated;
-            if (latencyCount > 0)
-            {
-                stats.latency.minUs = latencyMinUs;
-                stats.latency.maxUs = latencyMaxUs;
-                stats.latency.avgUs = static_cast<int64_t>(latencySumUs / latencyCount);
-                stats.latency.p99Us = percentile99(latencySamplesUs);
-                stats.latency.count = latencyCount;
-            }
-            if (callbackCount > 0)
-            {
-                stats.callback.minUs = callbackMinUs;
-                stats.callback.maxUs = callbackMaxUs;
-                stats.callback.avgUs = static_cast<int64_t>(callbackSumUs / callbackCount);
-                stats.callback.totalUs = callbackSumUs;
-                stats.callback.count = callbackCount;
-            }
-            if (spinCount > 0)
-            {
-                stats.spin.minUs = spinMinUs;
-                stats.spin.maxUs = spinMaxUs;
-                stats.spin.avgUs = static_cast<int64_t>(spinSumUs / spinCount);
-                stats.spin.count = spinCount;
-            }
-            stats.spin.activeCount = spinActiveCount;
-            stats.spin.idleCount = spinIdleCount;
-
-            stats.channels.reserve(channelStats.size());
-            for (const auto& [channel, channelStat] : channelStats)
-            {
-                TransportStats::Channel entry{};
-                entry.name = channel;
-                entry.deliveries = channelStat.deliveries;
-                if (channelStat.latencyCount > 0)
-                {
-                    entry.latency.minUs = channelStat.latencyMinUs;
-                    entry.latency.maxUs = channelStat.latencyMaxUs;
-                    entry.latency.avgUs = static_cast<int64_t>(
-                        channelStat.latencySumUs / channelStat.latencyCount);
-                    entry.latency.p99Us = percentile99(channelStat.latencySamplesUs);
-                    entry.latency.count = channelStat.latencyCount;
-                }
-                if (channelStat.callbackCount > 0)
-                {
-                    entry.callback.minUs = channelStat.callbackMinUs;
-                    entry.callback.maxUs = channelStat.callbackMaxUs;
-                    entry.callback.avgUs = static_cast<int64_t>(
-                        channelStat.callbackSumUs / channelStat.callbackCount);
-                    entry.callback.totalUs = channelStat.callbackSumUs;
-                    entry.callback.count = channelStat.callbackCount;
-                }
-                stats.channels.push_back(std::move(entry));
-            }
-            std::sort(stats.channels.begin(), stats.channels.end(),
-                      [](const TransportStats::Channel& a, const TransportStats::Channel& b)
-                      {
-                          if (a.deliveries != b.deliveries) return a.deliveries > b.deliveries;
-                          return a.callback.totalUs > b.callback.totalUs;
-                      });
-
-            latencyMinUs = std::numeric_limits<int64_t>::max();
-            latencyMaxUs = 0;
-            latencySumUs = 0;
-            latencyCount = 0;
-            latencySamplesUs.clear();
-            callbackMinUs = std::numeric_limits<int64_t>::max();
-            callbackMaxUs = 0;
-            callbackSumUs = 0;
-            callbackCount = 0;
-            spinMinUs = std::numeric_limits<int64_t>::max();
-            spinMaxUs = 0;
-            spinSumUs = 0;
-            spinCount = 0;
-            spinActiveCount = 0;
-            spinIdleCount = 0;
-            publishesDeduplicated = 0;
-            channelStats.clear();
-            return stats;
-        }
-
-        // (drainAll() removed — dispatch now lives inline in Transport::spinOnce
-        // so it can drop the apiMutex before invoking handlers. Holding the
-        // mutex across dispatch deadlocked against SharedTransport's mu_.)
     };
 
-    Transport::Transport() = default;
+    Transport::Transport() : impl_(std::make_unique<Impl>("")) {}
     Transport::~Transport() = default;
     Transport::Transport(Transport&&) noexcept = default;
     Transport& Transport::operator=(Transport&&) noexcept = default;
@@ -398,208 +250,384 @@ namespace raccoon
     Transport Transport::create(const std::string& provider)
     {
         Transport t;
-        try
-        {
-            t.impl_ = std::make_unique<Impl>(provider);
-        }
-        catch (const std::exception& e)
-        {
-            std::cerr << "raccoon::Transport: iceoryx2 init failed: "
-                << e.what() << std::endl;
-        }
-        if (!t.impl_ || !t.impl_->initialize())
-        {
-            std::cerr << "raccoon::Transport: failed to create iceoryx2 node"
-                << std::endl;
-        }
+        // The provider parameter is preserved for API compatibility with
+        // the old LCM signature; raccoon_ring has no analogous concept
+        // (every channel lives at /dev/shm/raccoon_ring_<encoded>) so we
+        // just thread it into the Impl ctor for symmetry.
+        t.impl_ = std::make_unique<Impl>(provider);
         return t;
     }
 
-    bool Transport::publishRaw(const std::string& channel, const void* data, int dataLen,
-                               const PublishOptions& options)
+    bool Transport::publishRaw(const std::string& channel, const void* data,
+                               int dataLen, const PublishOptions& /*options*/)
     {
-        if (!impl_ || !impl_->node) return false;
-        if (dataLen < 0) return false;
-
-        std::lock_guard<std::recursive_mutex> lock(impl_->apiMutex);
-
-        // options.reliable is intentionally ignored — see header comment.
-        (void)options.reliable;
-
-        if (options.deduplicate)
+        if (!impl_ || !impl_->isAlive() || !data || dataLen <= 0) return false;
+        std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+        rrb_writer_t* w = impl_->writerFor(channel, (size_t)dataLen);
+        if (!w) return false;
+        int rc = rrb_writer_publish(w, data, static_cast<size_t>(dataLen));
+        if (rc != 0)
         {
-            auto& cached = impl_->deduplicationCache[channel];
-            if (cached.size() == static_cast<size_t>(dataLen) &&
-                std::memcmp(cached.data(), data, dataLen) == 0)
-            {
-                std::lock_guard<std::mutex> statsLock(impl_->statsMutex);
-                ++impl_->publishesDeduplicated;
-                return true;
-            }
-            cached.assign(static_cast<const uint8_t*>(data),
-                          static_cast<const uint8_t*>(data) + dataLen);
+            // Only failure path in raccoon_ring's publish is "payload
+            // too big for the ring's max_payload". writerFor sizes the
+            // ring on first publish; if a LATER publish exceeds it the
+            // caller's payloads have grown out of band — best they can
+            // do is restart this process to re-size on the new first
+            // publish. Surface loudly so the symptom is obvious.
+            std::cerr << "raccoon::Transport: rrb_writer_publish('"
+                      << channel << "') rejected " << dataLen
+                      << "-byte payload (ring sized on first publish; "
+                      << "restart producer to re-size)\n";
+            return false;
         }
-
-        auto* pub = impl_->publisherFor(channel, options.retained);
-        if (!pub) return false;
-
-        // Loan a slice sized exactly for this message. iceoryx2 grows the
-        // SHM pool transparently via PowerOfTwo when dataLen exceeds the
-        // current pool's max slice; for the steady-state hot path the
-        // initial 4 KB hint covers most messages without reallocation.
-        auto sample = pub->loan_slice_uninit(static_cast<uint64_t>(dataLen)).value();
-        std::memcpy(sample.payload_mut().data(), data, static_cast<std::size_t>(dataLen));
-        auto init = iox2::assume_init(std::move(sample));
-        return iox2::send(std::move(init)).has_value();
+        return true;
     }
 
     bool Transport::subscribeRaw(const std::string& channel, RawHandler handler,
                                  const SubscribeOptions& options)
     {
-        if (!impl_ || !impl_->node) return false;
-
-        std::lock_guard<std::recursive_mutex> lock(impl_->apiMutex);
-
-        auto instrumentedHandler = [this, channel, handler = std::move(handler)]
-        (const void* data, int dataLen)
+        if (!impl_ || !impl_->isAlive() || !handler) return false;
+        bool fresh_channel = false;
         {
-            const auto started = std::chrono::steady_clock::now();
-            handler(data, dataLen);
-            const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - started).count();
-            recordCallback(channel, elapsedUs);
-        };
-
-        // options.reliable is intentionally ignored — see header comment.
-        (void)options.reliable;
-
-        auto* sub = impl_->subscriberFor(channel, options.requestRetained);
-        if (!sub) return false;
-        sub->handlers.push_back(std::move(instrumentedHandler));
+            std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+            const size_t pre = impl_->subscribers.size();
+            auto* sub = impl_->subscriberFor(channel);
+            if (!sub) return false;
+            sub->handlers.push_back(std::move(handler));
+            fresh_channel = (impl_->subscribers.size() > pre);
+            // Retain-on-attach: if the caller asked for the latest cached
+            // frame AND this is a fresh underlying subscriber (no prior
+            // handler already drained the ring), seek the reader to the
+            // last published seq so the next recv() hands out the cached
+            // frame instead of walking from the oldest slot. Only fires
+            // for fresh_channel — reusing an existing reader would
+            // re-deliver an already-dispatched frame to other handlers.
+            if (fresh_channel && options.requestRetained)
+                rrb_reader_seek_to_latest(sub->reader);
+        }
+        // If a NEW channel was opened, the spin thread's waitv list no
+        // longer reflects reality — wake it so it re-snapshots and
+        // includes the new reader's wake_seq. Adding only a handler to
+        // an existing channel doesn't need a wake.
+        if (fresh_channel) wakeControl();
         return true;
-    }
-
-    void Transport::recordLatency(const std::string& channel, int64_t us)
-    {
-        if (impl_) impl_->recordLatency(channel, us);
-    }
-
-    void Transport::recordCallback(const std::string& channel, int64_t us)
-    {
-        if (impl_) impl_->recordCallback(channel, us);
-    }
-
-    void Transport::recordSpin(int result, int64_t us)
-    {
-        if (impl_) impl_->recordSpin(result, us);
-    }
-
-    TransportStats Transport::getAndResetStats()
-    {
-        if (!impl_) return {};
-        return impl_->getAndResetStats();
     }
 
     int Transport::spinOnce(int timeoutMs)
     {
-        if (!impl_ || !impl_->node) return -1;
-        const auto started = std::chrono::steady_clock::now();
-        int dispatched = 0;
-        // We must NOT hold apiMutex while invoking subscriber callbacks:
-        // SharedTransport's handlers acquire their own mutex (mu_), and a
-        // concurrent subscribe() acquires mu_ first then tries to enter
-        // Transport. Holding apiMutex through the callback deadlocked
-        // every Python subscriber on the Pi. Strategy:
-        //   1. Take apiMutex, snapshot subscriber pointers (raw — entries
-        //      never get freed) and call iceoryx2 receive() for each.
-        //   2. Drop apiMutex.
-        //   3. Dispatch the snapshot lock-free.
-        const auto deadline = started + std::chrono::milliseconds(std::max(0, timeoutMs));
-        do
+        if (!impl_ || !impl_->isAlive()) return 0;
+
+        const auto t0 = std::chrono::steady_clock::now();
+        int delivered = 0;
+
+        // Snapshot the subscriber list under the mutex, then iterate.
+        // Each receive happens under the mutex (rrb_reader_recv is not
+        // thread-safe). Handler invocation releases the mutex so a slow
+        // handler does not block unrelated transport ops on other threads.
+        std::vector<Impl::SubEntry*> subsSnapshot;
         {
-            // Per-iteration drained samples. We memcpy the payload out of
-            // iceoryx2's borrowed SHM into a heap buffer because the sample
-            // (and its slot) is released when the loop iteration ends —
-            // dispatching outside the lock can't safely touch the iceoryx2
-            // memory. For sensor messages this is a few-byte copy; for
-            // ~200 KB camera frames it adds ~50 µs on a Pi 3B, acceptable
-            // at ~30 Hz.
-            struct Pending
-            {
-                Impl::SubEntry* sub;
-                std::vector<uint8_t> bytes;
-            };
-            std::vector<Pending> pending;
-            pending.reserve(impl_ ? impl_->subscribers.size() : 0);
-            {
-                std::lock_guard<std::recursive_mutex> lock(impl_->apiMutex);
-                for (auto& sub : impl_->subscribers)
-                {
-                    auto sample = sub->subscriber->receive().value();
-                    if (!sample.has_value()) continue;
-                    const auto& slice = sample->payload();
-                    const auto n = slice.number_of_bytes();
-                    if (n == 0) continue;
-                    Pending p;
-                    p.sub = sub.get();
-                    p.bytes.resize(static_cast<std::size_t>(n));
-                    std::memcpy(p.bytes.data(), slice.data(), static_cast<std::size_t>(n));
-                    pending.push_back(std::move(p));
-                }
-            }
-            // Dispatch lock-free.
-            for (auto& p : pending)
-            {
-                const int dataLen = static_cast<int>(p.bytes.size());
-                // Copy handler list locally so a subscribe inside the
-                // callback doesn't invalidate our iteration.
-                auto handlers = p.sub->handlers;
-                for (auto& h : handlers)
-                {
-                    h(p.bytes.data(), dataLen);
-                }
-                ++dispatched;
-            }
-            if (timeoutMs == 0) break;
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+            subsSnapshot.reserve(impl_->subscribers.size());
+            for (auto& s : impl_->subscribers) subsSnapshot.push_back(s.get());
         }
-        while (std::chrono::steady_clock::now() < deadline);
-        recordSpin(dispatched, std::chrono::duration_cast<std::chrono::microseconds>(
-                       std::chrono::steady_clock::now() - started).count());
-        return dispatched;
+
+        // Hold a snapshot of each frame + its handler list before
+        // releasing the mutex to call handlers. This guarantees handlers
+        // see a consistent view even if another thread adds/removes
+        // subscribers concurrently.
+        for (auto* sub : subsSnapshot)
+        {
+            while (true)
+            {
+                std::vector<uint8_t> frame;
+                std::vector<Transport::RawHandler> handlersCopy;
+                {
+                    std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+                    if (!impl_->isAlive()) return delivered;
+                    size_t outLen = 0;
+                    int rc = rrb_reader_recv(sub->reader,
+                                             sub->scratch.data(),
+                                             sub->scratch.size(),
+                                             &outLen);
+                    if (rc != 0) break;  // 1 = no data, -1 = error
+                    frame.assign(sub->scratch.begin(),
+                                 sub->scratch.begin() + outLen);
+                    handlersCopy = sub->handlers;
+                }
+
+                // Latency: now - msg timestamp (microseconds).
+                int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                int64_t msgUs = Impl::readTimestampBE(frame.data(),
+                                                     (int)frame.size());
+                if (msgUs > 0)
+                {
+                    recordLatency(sub->channel, nowUs - msgUs);
+                }
+
+                const auto cbStart = std::chrono::steady_clock::now();
+                for (auto& h : handlersCopy)
+                {
+                    try { h(frame.data(), (int)frame.size()); }
+                    catch (...) { /* swallow — handlers must not abort spin */ }
+                }
+                const auto cbEnd = std::chrono::steady_clock::now();
+                recordCallback(sub->channel,
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        cbEnd - cbStart).count());
+
+                ++delivered;
+            }
+        }
+
+        // Idle path: pure event-driven park. The control word goes into
+        // the futex_waitv list alongside every subscriber's wake_seq.
+        // Wakes within microseconds on ANY publish OR on a wakeControl()
+        // call from subscribe / shutdown / stop. The `timeoutMs`
+        // argument is now a watchdog upper bound — a sane caller passes
+        // something on the order of seconds; the thread does NOT poll
+        // and does NOT wake periodically otherwise.
+        //
+        // timeoutMs == 0 keeps `spinOnce` non-blocking: return immediately
+        // after the pass-1 drain. This preserves the historical contract
+        // for callers that only want to flush pending frames once
+        // (tests, manual ticks).
+        if (delivered == 0 && timeoutMs > 0)
+        {
+            int timeoutUs = timeoutMs * 1000;
+            uint32_t controlExpected =
+                impl_->controlSeq.load(std::memory_order_acquire);
+
+            struct MultiCtx {
+                Transport* t;
+                Impl::SubEntry** entries;
+                int* delivered_out;
+            };
+            std::vector<Impl::SubEntry*> entries(subsSnapshot);
+            std::vector<rrb_reader_t*> readers;
+            readers.reserve(entries.size());
+            {
+                std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+                if (!impl_->isAlive()) return delivered;
+                for (auto* e : entries) readers.push_back(e->reader);
+            }
+            MultiCtx ctx{this, entries.data(), &delivered};
+            auto cb = [](size_t idx, const void* data, size_t len,
+                         void* user) -> int {
+                auto* c = static_cast<MultiCtx*>(user);
+                Impl::SubEntry* sub = c->entries[idx];
+                int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                int64_t msgUs = Impl::readTimestampBE(data, (int)len);
+                if (msgUs > 0)
+                    c->t->recordLatency(sub->channel, nowUs - msgUs);
+                std::vector<Transport::RawHandler> handlersCopy;
+                {
+                    // recordLatency takes its own lock; handler list
+                    // copy needs apiMutex.
+                    handlersCopy = sub->handlers;
+                }
+                for (auto& h : handlersCopy) {
+                    try { h(data, (int)len); }
+                    catch (...) {}
+                }
+                ++(*c->delivered_out);
+                return 0;
+            };
+            if (readers.empty())
+            {
+                // Only the control word to park on. recv_wait_many's
+                // contract requires n >= 1 readers, so we hand-park
+                // on the control futex directly using a private
+                // futex_wait — equivalent semantics, no readers needed.
+                struct timespec ts = {
+                    timeoutUs / 1000000,
+                    (long)(timeoutUs % 1000000) * 1000L,
+                };
+                (void)syscall(SYS_futex, &impl_->controlSeq, FUTEX_WAIT,
+                              controlExpected, &ts, nullptr, 0);
+            }
+            else
+            {
+                (void)rrb_reader_recv_wait_many_with_control(
+                    readers.data(), readers.size(),
+                    reinterpret_cast<uint32_t*>(&impl_->controlSeq),
+                    controlExpected,
+                    cb, &ctx, timeoutUs);
+            }
+        }
+
+        const auto t1 = std::chrono::steady_clock::now();
+        recordSpin(delivered,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                t1 - t0).count());
+        return delivered;
     }
 
     void Transport::spin()
     {
-        if (!impl_ || !impl_->node) return;
-        impl_->running = true;
-        while (impl_->running)
+        while (impl_ && impl_->isAlive())
         {
-            const auto started = std::chrono::steady_clock::now();
-            int dispatched = spinOnce(1);
-            recordSpin(dispatched, std::chrono::duration_cast<std::chrono::microseconds>(
-                           std::chrono::steady_clock::now() - started).count());
+            spinOnce(10);
         }
     }
 
     void Transport::stop()
     {
-        if (impl_) impl_->running = false;
+        if (impl_) impl_->running.store(false);
+        wakeControl();  // unblock any thread parked in spinOnce
     }
 
     void Transport::shutdown()
     {
         if (!impl_) return;
-        impl_->running = false;
-        // Destroy iceoryx2 ports + Node deterministically here, while the
-        // caller still controls execution. After this returns, impl_ is
-        // null and every entry point above short-circuits. ~Transport()
-        // then no-ops on a null impl_ in the eventual static teardown.
-        impl_.reset();
+        impl_->shutdown();
+        // wakeControl() works even after shutdown — the controlSeq lives
+        // in Impl, which we still own, and the futex word doesn't care.
+        // Without this, anyone still parked in spinOnce would wait up to
+        // the watchdog timeout (1 s) for their wait to expire.
+        wakeControl();
+    }
+
+    void Transport::wakeControl()
+    {
+        if (!impl_) return;
+        // Bump the value (release-ordered against any state the waker
+        // wants the spin thread to observe — running flag, subscriber
+        // list, etc.) then FUTEX_WAKE so a parked spin thread exits its
+        // wait immediately. The waker side never blocks: FUTEX_WAKE on
+        // a word with no waiters is a ~50 ns no-op.
+        std::atomic_fetch_add_explicit(&impl_->controlSeq, uint32_t{1},
+                                       std::memory_order_release);
+        syscall(SYS_futex, &impl_->controlSeq, FUTEX_WAKE, INT_MAX,
+                nullptr, nullptr, 0);
     }
 
     bool Transport::is_alive() const noexcept
     {
-        return impl_ != nullptr;
+        return impl_ && impl_->isAlive();
+    }
+
+    // ---- Stats wiring (drop-in replacement for the iceoryx2 version) ---
+
+    void Transport::recordLatency(const std::string& channel, int64_t us)
+    {
+        if (!impl_ || us < 0) return;
+        std::lock_guard<std::mutex> lk(impl_->statsMutex);
+        impl_->latencyMinUs = std::min(impl_->latencyMinUs, us);
+        impl_->latencyMaxUs = std::max(impl_->latencyMaxUs, us);
+        impl_->latencySumUs += us;
+        ++impl_->latencyCount;
+        auto& ch = impl_->channelStats[channel];
+        ch.latencyMinUs = std::min(ch.latencyMinUs, us);
+        ch.latencyMaxUs = std::max(ch.latencyMaxUs, us);
+        ch.latencySumUs += us;
+        ++ch.latencyCount;
+        // ch.deliveries is bumped in recordCallback() so payloads without
+        // a parseable timestamp prefix still register a delivery.
+    }
+
+    void Transport::recordCallback(const std::string& channel, int64_t us)
+    {
+        if (!impl_) return;
+        std::lock_guard<std::mutex> lk(impl_->statsMutex);
+        impl_->callbackMinUs = std::min(impl_->callbackMinUs, us);
+        impl_->callbackMaxUs = std::max(impl_->callbackMaxUs, us);
+        impl_->callbackSumUs += us;
+        ++impl_->callbackCount;
+        auto& ch = impl_->channelStats[channel];
+        ch.callbackMinUs = std::min(ch.callbackMinUs, us);
+        ch.callbackMaxUs = std::max(ch.callbackMaxUs, us);
+        ch.callbackSumUs += us;
+        ++ch.callbackCount;
+        // Count every frame we hand off to a user handler, not only the
+        // ones whose payload carried a parseable timestamp prefix.
+        // recordLatency() also ticks deliveries when it runs, but it short-
+        // circuits on payloads < 8 bytes — without this bump, callers that
+        // publish small raw frames would see zero deliveries reported.
+        ++ch.deliveries;
+    }
+
+    void Transport::recordSpin(int result, int64_t us)
+    {
+        if (!impl_) return;
+        std::lock_guard<std::mutex> lk(impl_->statsMutex);
+        impl_->spinMinUs = std::min(impl_->spinMinUs, us);
+        impl_->spinMaxUs = std::max(impl_->spinMaxUs, us);
+        impl_->spinSumUs += us;
+        ++impl_->spinCount;
+        if (result > 0) ++impl_->spinActiveCount; else ++impl_->spinIdleCount;
+    }
+
+    TransportStats Transport::getAndResetStats()
+    {
+        TransportStats out{};
+        if (!impl_) return out;
+        std::lock_guard<std::mutex> lk(impl_->statsMutex);
+
+        auto fillLat = [](TransportStats::Latency& o,
+                          int64_t minUs, int64_t maxUs, int64_t sumUs,
+                          uint64_t count) {
+            o.count = count;
+            if (count) {
+                o.minUs = minUs;
+                o.maxUs = maxUs;
+                o.avgUs = sumUs / (int64_t)count;
+                o.p99Us = maxUs;  // we don't keep samples for true p99;
+                                  // surface max as a conservative upper bound
+            }
+        };
+        auto fillCb = [](TransportStats::Callback& o,
+                         int64_t minUs, int64_t maxUs, int64_t sumUs,
+                         uint64_t count) {
+            o.count = count; o.totalUs = sumUs;
+            if (count) {
+                o.minUs = minUs; o.maxUs = maxUs;
+                o.avgUs = sumUs / (int64_t)count;
+            }
+        };
+
+        fillLat(out.latency, impl_->latencyMinUs, impl_->latencyMaxUs,
+                impl_->latencySumUs, impl_->latencyCount);
+        fillCb(out.callback, impl_->callbackMinUs, impl_->callbackMaxUs,
+               impl_->callbackSumUs, impl_->callbackCount);
+        out.spin.count = impl_->spinCount;
+        out.spin.activeCount = impl_->spinActiveCount;
+        out.spin.idleCount = impl_->spinIdleCount;
+        if (impl_->spinCount) {
+            out.spin.minUs = impl_->spinMinUs;
+            out.spin.maxUs = impl_->spinMaxUs;
+            out.spin.avgUs = impl_->spinSumUs / (int64_t)impl_->spinCount;
+        }
+        out.publishesDeduplicated = 0;  // legacy field, raccoon_ring has no dedup
+
+        for (auto& [ch, acc] : impl_->channelStats) {
+            TransportStats::Channel c{};
+            c.name = ch;
+            c.deliveries = acc.deliveries;
+            fillLat(c.latency, acc.latencyMinUs, acc.latencyMaxUs,
+                    acc.latencySumUs, acc.latencyCount);
+            fillCb(c.callback, acc.callbackMinUs, acc.callbackMaxUs,
+                   acc.callbackSumUs, acc.callbackCount);
+            out.channels.push_back(std::move(c));
+        }
+
+        // Reset accumulators (same semantics as the iceoryx2 version)
+        impl_->latencyMinUs = std::numeric_limits<int64_t>::max();
+        impl_->latencyMaxUs = 0;
+        impl_->latencySumUs = 0;
+        impl_->latencyCount = 0;
+        impl_->callbackMinUs = std::numeric_limits<int64_t>::max();
+        impl_->callbackMaxUs = 0;
+        impl_->callbackSumUs = 0;
+        impl_->callbackCount = 0;
+        impl_->spinMinUs = std::numeric_limits<int64_t>::max();
+        impl_->spinMaxUs = 0;
+        impl_->spinSumUs = 0;
+        impl_->spinCount = 0;
+        impl_->spinActiveCount = 0;
+        impl_->spinIdleCount = 0;
+        impl_->channelStats.clear();
+        return out;
     }
 }

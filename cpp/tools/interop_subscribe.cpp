@@ -16,27 +16,11 @@
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: interop_subscribe <channel> <type> [options]\n"
-                  << "       interop_subscribe --fingerprint <type>\n"
                   << "       interop_subscribe --decode-hex <type> <hex>\n";
         return 1;
     }
 
     std::string firstArg = argv[1];
-
-    // --fingerprint <type>: print fingerprint and exit
-    if (firstArg == "--fingerprint") {
-        if (argc < 3) {
-            std::cerr << "Usage: interop_subscribe --fingerprint <type>\n";
-            return 1;
-        }
-        std::string type = argv[2];
-        int64_t hash = getFingerprint(type);
-        uint64_t uhash = static_cast<uint64_t>(hash);
-        std::ostringstream oss;
-        oss << "0x" << std::hex << std::setfill('0') << std::setw(16) << uhash;
-        printEvent("{\"event\":\"fingerprint\",\"value\":\"" + oss.str() + "\"}");
-        return 0;
-    }
 
     // --decode-hex <type> <hex>: decode hex bytes and exit
     if (firstArg == "--decode-hex") {

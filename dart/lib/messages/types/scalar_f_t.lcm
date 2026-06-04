@@ -1,7 +1,0 @@
-package exlcm;
-
-struct scalar_f_t
-{
-    int64_t timestamp;
-    float   value;
-}

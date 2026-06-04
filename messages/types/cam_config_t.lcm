@@ -1,7 +1,0 @@
-package raccoon;
-
-struct cam_config_t
-{
-    int64_t timestamp;
-    string  config;     // JSON: {colors: [{label, hsv_ranges, min_area}], mask: [[x,y],...], ...}
-}

@@ -1,9 +1,0 @@
-package raccoon;
-
-struct ack_t
-{
-    int64_t timestamp;
-    string  publisher_id;
-    int64_t seq_num;
-    string  subscriber_id;
-}
