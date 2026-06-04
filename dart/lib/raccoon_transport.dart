@@ -20,6 +20,16 @@ export 'src/lcm/generator/dart_generator.dart';
 export 'src/channels.dart';
 export 'src/transport.dart';
 
+// raccoon_ring SHM transport — Dart FFI bridge around the in-tree
+// raccoon_ring (cpp/src/raccoon_ring.c). Use this on Flutter/Dart
+// clients that need zero-copy SHM IPC with the C++/Python sides of
+// raccoon-transport instead of going over UDP-LCM.
+//
+// Requires libraccoon_ring_bridge.so on the dlopen() search path. Build
+// it via cpp/bridge/build.sh (cross-compiles for aarch64 Pi by default).
+export 'src/ring/transport.dart';
+export 'src/ring/raccoon_ring_bridge_ffi.dart' show setLibraryPath;
+
 // Generated message types
 export 'messages/types/orientation_matrix_t.g.dart';
 export 'messages/types/quaternion_t.g.dart';
