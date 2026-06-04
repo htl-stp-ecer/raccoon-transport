@@ -1,8 +1,0 @@
-package raccoon;
-
-struct retain_request_t
-{
-    int64_t timestamp;
-    string  channel;
-    string  subscriber_id;
-}

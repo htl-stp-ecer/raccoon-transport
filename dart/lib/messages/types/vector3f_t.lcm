@@ -1,9 +1,0 @@
-package exlcm;
-
-struct vector3f_t
-{
-    int64_t timestamp;
-    float   x;
-    float   y;
-    float   z;
-}

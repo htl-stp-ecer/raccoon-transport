@@ -1,9 +1,8 @@
-"""Public Python API for the shared Raccoon LCM transport package.
+"""Public Python API for the shared Raccoon transport package.
 
 This package exposes:
 
-- ``Transport``: a wrapper around ``lcm.LCM`` with reliable and retained
-  delivery helpers.
+- ``Transport``: a transport wrapper with reliable and retained delivery helpers.
 - ``Channels``: stable application-level channel names.
 - ``ProtocolChannels``: internal channels used by the transport protocol.
 """

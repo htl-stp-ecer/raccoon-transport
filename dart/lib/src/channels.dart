@@ -35,6 +35,7 @@ class Channels {
 
   // Parametric channels
   static String servoMode(int port) => 'raccoon/servo/$port/mode';
+  static String servoModeCommand(int port) => 'raccoon/servo/$port/mode_cmd';
   static String servoPosition(int port) => 'raccoon/servo/$port/position';
   static String servoPositionCommand(int port) => 'raccoon/servo/$port/position_cmd';
   static String servoSmoothPositionCommand(int port) => 'raccoon/servo/$port/smooth_cmd';

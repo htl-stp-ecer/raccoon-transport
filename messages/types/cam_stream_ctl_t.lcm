@@ -1,7 +1,0 @@
-package raccoon;
-
-struct cam_stream_ctl_t
-{
-    int64_t timestamp;
-    int8_t  enabled;    // 1 = start streaming frames, 0 = stop
-}

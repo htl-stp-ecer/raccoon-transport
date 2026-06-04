@@ -1,7 +1,0 @@
-package raccoon;
-
-struct scalar_i8_t
-{
-    int64_t timestamp;
-    int8_t dir;
-}

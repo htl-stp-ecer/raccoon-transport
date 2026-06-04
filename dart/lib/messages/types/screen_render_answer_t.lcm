@@ -1,9 +1,0 @@
-package exlcm;
-
-struct screen_render_answer_t
-{
-    int64_t timestamp;
-    string screen_name;
-    string value;
-    string reason;
-}

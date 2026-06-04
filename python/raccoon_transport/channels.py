@@ -39,6 +39,13 @@ class Channels:
         return f"raccoon/servo/{port}/mode"
 
     @staticmethod
+    def servo_mode_command(port: int) -> str:
+        # Commands go here, state on servo_mode — split so reader does
+        # not subscribe to its own publishes (eliminates the ~5 ms
+        # self-loopback delay floor on inbound LCM latency).
+        return f"raccoon/servo/{port}/mode_cmd"
+
+    @staticmethod
     def servo_position(port: int) -> str:
         return f"raccoon/servo/{port}/position"
 

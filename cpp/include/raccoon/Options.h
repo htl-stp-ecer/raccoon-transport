@@ -11,7 +11,7 @@ namespace raccoon
     // dropped packets; iceoryx2 runs over shared memory and doesn't.
     // Keep using `retained` if you need the publisher's last sample to
     // be replayed to late subscribers (mapped to iceoryx2 history_size).
-#define RACCOON_DEPRECATED_RELIABLE \
+    #define RACCOON_DEPRECATED_RELIABLE \
         [[deprecated("reliable delivery is a no-op on the iceoryx2 transport — " \
                      "remove this flag; the SHM backend doesn't lose packets.")]]
 

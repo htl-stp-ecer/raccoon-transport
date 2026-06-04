@@ -1,8 +1,0 @@
-package raccoon;
-
-struct screen_render_t
-{
-    int64_t timestamp;
-    string screen_name;
-    string entries;
-}

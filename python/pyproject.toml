@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raccoon-transport"
-version = "0.1.0"
-description = "Shared LCM transport library with channel definitions and optional reliable delivery"
+version = "0.1.51"
+description = "Shared transport library with channel definitions and optional reliable delivery"
 license = { text = "MIT" }
 authors = [{ name = "Tobias Madlberger" }]
-keywords = ["botball", "robotics", "lcm", "transport", "raspberry-pi"]
+keywords = ["botball", "robotics", "transport", "raspberry-pi"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -18,7 +18,7 @@ classifiers = [
     "Topic :: Software Development :: Embedded Systems",
 ]
 requires-python = ">=3.8"
-dependencies = ["lcm"]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest"]
