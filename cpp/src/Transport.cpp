@@ -75,6 +75,10 @@ namespace raccoon
         struct PubEntry
         {
             rrb_writer_t* writer = nullptr;
+            // Track the ring's current max_payload so publishRaw can
+            // detect outgrowth and re-create the writer with a larger
+            // ring instead of dropping the frame.
+            uint32_t max_payload = 0;
         };
         struct SubEntry
         {
@@ -168,23 +172,32 @@ namespace raccoon
         // Returns nullptr if rrb_writer_create rejected the channel name
         // (bad characters) or could not open /dev/shm — those are hard
         // configuration errors, not transients.
-        rrb_writer_t* writerFor(const std::string& channel, size_t size_hint)
+        // Compute (slot_count, max_payload) for a ring sized to fit
+        // `size_hint` bytes with 2× headroom. Shared by writerFor (first
+        // publish) and growWriter (later publish that outgrew the ring).
+        static void sizeRing(size_t size_hint, size_t& slots, size_t& want)
         {
-            auto it = publishers.find(channel);
-            if (it != publishers.end()) return it->second.writer;
-
             // Round size_hint UP to a multiple of 256 bytes, double it
             // for headroom (next sensor frame may be slightly larger),
             // and clamp at a sane floor.
-            size_t want = (size_hint ? size_hint : 1) * 2;
+            want = (size_hint ? size_hint : 1) * 2;
             if (want < RRB_DEFAULT_MAX_PAYLOAD) want = RRB_DEFAULT_MAX_PAYLOAD;
             // round up to 256 bytes
             want = ((want + 255) / 256) * 256;
 
             // ~128 KiB ring budget; clamp slot count to [4, 64].
-            size_t slots = (128u * 1024u) / want;
+            slots = (128u * 1024u) / want;
             if (slots < 4) slots = 4;
             if (slots > RRB_DEFAULT_SLOT_COUNT) slots = RRB_DEFAULT_SLOT_COUNT;
+        }
+
+        rrb_writer_t* writerFor(const std::string& channel, size_t size_hint)
+        {
+            auto it = publishers.find(channel);
+            if (it != publishers.end()) return it->second.writer;
+
+            size_t slots = 0, want = 0;
+            sizeRing(size_hint, slots, want);
 
             rrb_writer_t* w = rrb_writer_create(
                 channel.c_str(),
@@ -197,7 +210,43 @@ namespace raccoon
                                         "/dev/shm not writable)\n";
                 return nullptr;
             }
-            publishers.emplace(channel, PubEntry{w});
+            publishers.emplace(channel, PubEntry{w, (uint32_t)want});
+            return w;
+        }
+
+        // Destroy and re-create the writer for `channel` with a ring big
+        // enough for `min_payload` bytes. The underlying SHM file is
+        // wiped + re-initialised in place by rrb_writer_create (header
+        // contract: mismatched layout triggers ftruncate + re-init).
+        // Active readers' mmaps stay valid but they will see a seq
+        // discontinuity — acceptable for "publisher's payload size grew
+        // mid-stream", which is the only caller. Returns nullptr if
+        // re-create failed (channel is then removed from `publishers`).
+        rrb_writer_t* growWriter(const std::string& channel, size_t min_payload)
+        {
+            auto it = publishers.find(channel);
+            if (it == publishers.end()) return nullptr;
+
+            size_t slots = 0, want = 0;
+            sizeRing(min_payload, slots, want);
+            if (want <= it->second.max_payload) return it->second.writer;
+
+            rrb_writer_destroy(it->second.writer);
+            rrb_writer_t* w = rrb_writer_create(
+                channel.c_str(),
+                (uint32_t)slots,
+                (uint32_t)want);
+            if (!w)
+            {
+                std::cerr << "raccoon::Transport: rrb_writer_create('"
+                    << channel << "') failed during grow (was "
+                    << it->second.max_payload << "B, wanted "
+                    << want << "B)\n";
+                publishers.erase(it);
+                return nullptr;
+            }
+            it->second.writer = w;
+            it->second.max_payload = (uint32_t)want;
             return w;
         }
 
@@ -270,14 +319,21 @@ namespace raccoon
         {
             // Only failure path in raccoon_ring's publish is "payload
             // too big for the ring's max_payload". writerFor sizes the
-            // ring on first publish; if a LATER publish exceeds it the
-            // caller's payloads have grown out of band — best they can
-            // do is restart this process to re-size on the new first
-            // publish. Surface loudly so the symptom is obvious.
+            // ring on first publish; if a LATER publish exceeds it we
+            // tear down the writer and re-create it with a bigger ring
+            // (rrb_writer_create wipes + re-inits the SHM file in place,
+            // readers re-sync on their next recv). Surface the resize so
+            // log readers can correlate any seq discontinuity with it.
             std::cerr << "raccoon::Transport: rrb_writer_publish('"
                       << channel << "') rejected " << dataLen
-                      << "-byte payload (ring sized on first publish; "
-                      << "restart producer to re-size)\n";
+                      << "-byte payload — resizing ring\n";
+            w = impl_->growWriter(channel, (size_t)dataLen);
+            if (!w) return false;
+            rc = rrb_writer_publish(w, data, static_cast<size_t>(dataLen));
+            if (rc == 0) return true;
+            std::cerr << "raccoon::Transport: rrb_writer_publish('"
+                << channel << "') still rejected " << dataLen
+                << "-byte payload after resize\n";
             return false;
         }
         return true;
