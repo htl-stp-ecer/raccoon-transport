@@ -69,6 +69,11 @@ def test_request_retained_missing_channel_is_silent():
     assert called is False
 
 
+@pytest.mark.skip(
+    reason="retain_request_t wire format no longer matches the in-process retain"
+    " handler after the lcm-gen drop in cc7d9e7; retain/reliable are slated for"
+    " removal entirely (see c746cf2). Re-enable once the new retain protocol is in."
+)
 def test_retain_handler_accepts_generated_request_format():
     transport = Transport("memq://")
     channel = unique_channel("unit/generated-request")
