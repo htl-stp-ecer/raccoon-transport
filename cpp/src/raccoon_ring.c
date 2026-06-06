@@ -495,7 +495,8 @@ static int reader_reopen_if_unlinked(rrb_reader_t* r) {
 // Returns 0 on success, -1 on hard error (write-permission denied,
 // /dev/shm unwritable, etc.). The error is non-fatal for the reader —
 // rrb_reader_open continues either way and lazy-attaches in recv().
-static int reader_touch_placeholder(const char* path) {
+static int reader_touch_placeholder(const char* path)
+{
     int fd = open(path, O_CREAT | O_RDWR, 0660);
     if (fd < 0) return -1;
     close(fd);

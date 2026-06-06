@@ -239,9 +239,9 @@ namespace raccoon
             if (!w)
             {
                 std::cerr << "raccoon::Transport: rrb_writer_create('"
-                          << channel << "') failed during grow (was "
-                          << it->second.max_payload << "B, wanted "
-                          << want << "B)\n";
+                    << channel << "') failed during grow (was "
+                    << it->second.max_payload << "B, wanted "
+                    << want << "B)\n";
                 publishers.erase(it);
                 return nullptr;
             }
@@ -332,8 +332,8 @@ namespace raccoon
             rc = rrb_writer_publish(w, data, static_cast<size_t>(dataLen));
             if (rc == 0) return true;
             std::cerr << "raccoon::Transport: rrb_writer_publish('"
-                      << channel << "') still rejected " << dataLen
-                      << "-byte payload after resize\n";
+                << channel << "') still rejected " << dataLen
+                << "-byte payload after resize\n";
             return false;
         }
         return true;
