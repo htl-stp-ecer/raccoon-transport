@@ -46,4 +46,13 @@ if (BUILD_TESTING)
     target_include_directories(raccoon_transport_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_unit_tests COMMAND raccoon_transport_unit_tests)
+
+    add_executable(raccoon_transport_reader_recv_robust_tests
+        tests/test_reader_recv_robust.cpp)
+    target_link_libraries(raccoon_transport_reader_recv_robust_tests PRIVATE
+        raccoon_transport)
+    target_include_directories(raccoon_transport_reader_recv_robust_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_reader_recv_robust_tests
+        COMMAND raccoon_transport_reader_recv_robust_tests)
 endif()
