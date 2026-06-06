@@ -478,6 +478,30 @@ static int reader_reopen_if_unlinked(rrb_reader_t* r) {
     return (rc == 0) ? 0 : -1;
 }
 
+// Touch the SHM file so it shows up in /dev/shm immediately on subscribe
+// even before any producer publishes. Size stays at 0 — reader_attach
+// treats size < sizeof(ring_hdr_t) as "producer hasn't initialised yet"
+// and returns -2 (lazy), so we never mmap an uninitialised file and so
+// can't be SIGBUS'd by a later producer ftruncate. When the producer
+// eventually calls rrb_writer_create, its shm_open_mmap(create=1) finds
+// the existing 0-byte file, ftruncates it up to want_size, and writes
+// the header — exactly as if we'd never touched it.
+//
+// Why bother: callers and ops tools can see "this subscriber is alive
+// and waiting on channel X" by ls'ing /dev/shm, without having to wait
+// for the producer to materialise. Also collapses one ENOENT round-trip
+// in the producer's first publish.
+//
+// Returns 0 on success, -1 on hard error (write-permission denied,
+// /dev/shm unwritable, etc.). The error is non-fatal for the reader —
+// rrb_reader_open continues either way and lazy-attaches in recv().
+static int reader_touch_placeholder(const char* path) {
+    int fd = open(path, O_CREAT | O_RDWR, 0660);
+    if (fd < 0) return -1;
+    close(fd);
+    return 0;
+}
+
 rrb_reader_t* rrb_reader_open(const char* channel) {
     if (!channel) return NULL;
     rrb_reader_t* r = calloc(1, sizeof(*r));
@@ -487,8 +511,15 @@ rrb_reader_t* rrb_reader_open(const char* channel) {
     }
     strncpy(r->channel, channel, sizeof(r->channel) - 1);
     r->fd = -1;
-    // Try to attach now; if file doesn't exist yet, leave r->base NULL
-    // and let recv() retry. The caller doesn't need to care.
+    // Create the file as a 0-byte placeholder if it doesn't exist yet
+    // so subscribers materialise the channel even before any producer
+    // appears. Safe against later producer-side ftruncate: we don't
+    // mmap a 0-byte file (reader_attach bails on size < header), so
+    // there's nothing to SIGBUS.
+    (void)reader_touch_placeholder(r->path);
+    // Try to attach now; if the producer hasn't initialised the header
+    // yet (file is 0 bytes or stale magic), leave r->base NULL and let
+    // recv() retry. The caller doesn't need to care.
     (void)reader_attach(r);
     return r;
 }
