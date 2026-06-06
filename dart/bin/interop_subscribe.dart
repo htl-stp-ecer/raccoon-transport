@@ -43,32 +43,7 @@ Map<String, dynamic> _messageToJson(String type, LcmMessage msg) {
   }
 }
 
-int _getFingerprint(String type) {
-  switch (type) {
-    case 'scalar_f_t':
-      return ScalarFT.LCM_FINGERPRINT;
-    case 'scalar_i32_t':
-      return ScalarI32T.LCM_FINGERPRINT;
-    case 'vector3f_t':
-      return Vector3fT.LCM_FINGERPRINT;
-    case 'string_t':
-      return StringT.LCM_FINGERPRINT;
-    default:
-      throw ArgumentError('Unknown type: $type');
-  }
-}
-
 Future<void> main(List<String> args) async {
-  // --fingerprint <type>: print fingerprint and exit
-  if (args.isNotEmpty && args[0] == '--fingerprint') {
-    final type = args[1];
-    final fp = _getFingerprint(type);
-    final hex =
-        '0x${BigInt.from(fp).toUnsigned(64).toRadixString(16).padLeft(16, '0')}';
-    _printEvent({'event': 'fingerprint', 'value': hex});
-    exit(0);
-  }
-
   // --decode-hex <type> <hex>: decode hex bytes and exit
   if (args.isNotEmpty && args[0] == '--decode-hex') {
     final type = args[1];
