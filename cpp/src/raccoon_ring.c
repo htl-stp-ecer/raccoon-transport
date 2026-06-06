@@ -542,6 +542,26 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
             if (reader_attach(r) != 0) return 1;
         }
 
+        // Producer-side grow detection: if the writer's growWriter() path
+        // tore down and re-created this ring with a bigger max_payload, the
+        // header's slot_size changed under our mmap but our cached stride
+        // didn't, and reading slots with the stale stride yields garbage —
+        // observed as "UI froze on a single frame" after the first oversized
+        // JPEG triggered a "resizing ring" log on the producer. The file
+        // isn't unlinked by the resize path, so reader_reopen_if_unlinked()
+        // can't catch this. Compare live slot_size to our cached stride and
+        // re-attach on mismatch; the re-attach maps the new file size and
+        // refreshes stride/slots in one go.
+        if (r->hdr && r->hdr->slot_size != r->stride) {
+            reader_detach(r);
+            if (reader_attach(r) != 0) return 1;
+            // Producer rebuilt the ring → seq counter restarted at 0. Old
+            // last_seen is meaningless against the new epoch; replay from
+            // the start so we don't sit forever waiting for a seq number
+            // the new producer will never reach.
+            r->last_seen = 0;
+        }
+
         uint64_t producer = atomic_load_explicit(&r->hdr->producer_seq,
                                                  memory_order_acquire);
         if (producer == r->last_seen) {
