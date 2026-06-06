@@ -651,7 +651,19 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
     int delivered = 0;
     for (size_t i = 0; i < n; ++i) {
         rrb_reader_t* r = readers[i];
-        if (!r || !r->base) continue;
+        if (!r) continue;
+        // Lazy reattach: a reader opened before its producer materialised
+        // the SHM file stays with r->base == NULL until something calls
+        // reader_attach() on it again. The single-reader rrb_reader_recv
+        // path retries on every call; this multi-reader path used to
+        // skip unattached readers entirely, so a subscriber that started
+        // before its publisher never caught up and only a process
+        // restart would heal it. Cost of a retry when the file is still
+        // missing is one shm_open() that fails with ENOENT — negligible
+        // at the 20 Hz spin rate of the bridge poll loop.
+        if (!r->base) {
+            if (reader_attach(r) != 0) continue;
+        }
         for (;;) {
             size_t out_len = 0;
             uint8_t* buf = scratch;
@@ -733,9 +745,15 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
 
     // Pass 3: post-wake drain. Whatever woke us probably has data; the
     // other channels' subsequent publishes will catch the next call.
+    // Also retry the lazy attach so a reader whose producer started
+    // during the futex_waitv joins the drain immediately instead of
+    // waiting one more spin.
     for (size_t i = 0; i < n; ++i) {
         rrb_reader_t* r = readers[i];
-        if (!r || !r->base) continue;
+        if (!r) continue;
+        if (!r->base) {
+            if (reader_attach(r) != 0) continue;
+        }
         for (;;) {
             size_t out_len = 0;
             uint8_t* buf = scratch;
