@@ -1,7 +1,10 @@
 #include "raccoon/Options.h"
 #include "raccoon/Transport.h"
+#include "raccoon/raccoon_ring.h"
 
 #include <raccoon/scalar_i32_t.hpp>
+
+#include <unistd.h>
 
 #include <atomic>
 #include <chrono>
@@ -189,6 +192,71 @@ namespace
                 "callback's nested publish should reach its own subscriber");
     }
 
+    void testOversizedPublishGrowsRingAndRepublishes()
+    {
+        // Regression test for the grow-and-republish path: a payload larger
+        // than the ring's max_payload must transparently re-create the ring
+        // with a bigger slot size AND republish the frame — and an already-
+        // attached subscriber must keep receiving (the reader detects the
+        // slot_size change and re-attaches; this detection was lost once in
+        // a refactor and froze the botui on the last pre-grow frame).
+        const std::string channel = "unit/grow";
+
+        // Wipe any stale ring from a previous run so the first publish
+        // deterministically sizes the ring at RRB_DEFAULT_MAX_PAYLOAD.
+        char shmPath[512];
+        require(rrb_channel_to_path(channel.c_str(), shmPath, sizeof(shmPath)) == 0,
+                "failed to derive shm path for " + channel);
+        (void)unlink(shmPath);
+
+        auto transport = raccoon::Transport::create("memq://");
+
+        std::mutex framesMutex;
+        std::vector<std::vector<uint8_t>> frames;
+        require(transport.subscribeRaw(channel,
+            [&](const void* data, int len)
+            {
+                std::lock_guard<std::mutex> lk(framesMutex);
+                const auto* bytes = static_cast<const uint8_t*>(data);
+                frames.emplace_back(bytes, bytes + len);
+            }), "subscribe grow failed");
+
+        // First publish sizes the ring at the 2 KiB default.
+        std::vector<uint8_t> small(64, 0xAB);
+        require(transport.publishRaw(channel, small.data(), (int)small.size()),
+                "small publish failed");
+        spinTransport(transport);
+
+        // Oversized frame (> 2 KiB) forces grow-and-republish.
+        std::vector<uint8_t> big(8000);
+        for (size_t i = 0; i < big.size(); ++i)
+        {
+            big[i] = static_cast<uint8_t>(i * 31u);
+        }
+        require(transport.publishRaw(channel, big.data(), (int)big.size()),
+                "oversized publish should grow the ring and succeed");
+        spinTransport(transport);
+
+        // The channel must keep working after the resize.
+        std::vector<uint8_t> after(100, 0xCD);
+        require(transport.publishRaw(channel, after.data(), (int)after.size()),
+                "post-grow publish failed");
+        spinTransport(transport);
+
+        std::lock_guard<std::mutex> lk(framesMutex);
+        bool sawBig = false;
+        bool sawAfter = false;
+        for (const auto& f : frames)
+        {
+            if (f == big) sawBig = true;
+            if (f == after) sawAfter = true;
+        }
+        require(sawBig,
+                "subscriber should receive the oversized frame intact after the ring grow");
+        require(sawAfter,
+                "subscriber should keep receiving frames published after the ring grow");
+    }
+
     void testSlowSubscriberCallbackDoesNotBlockConcurrentSubscribe()
     {
         auto transport = raccoon::Transport::create("memq://");
@@ -247,6 +315,7 @@ int main()
         {"typed subscription records and resets latency stats", testTypedSubscriptionRecordsAndResetsLatencyStats},
         {"heartbeat stays on time while writers flood", testHeartbeatStaysOnTimeWhileWritersFlood},
         {"subscriber callback can publish back (recursive)", testSubscriberCallbackCanPublishBack},
+        {"oversized publish grows ring and republishes", testOversizedPublishGrowsRingAndRepublishes},
         {"slow subscriber callback does not block concurrent subscribe", testSlowSubscriberCallbackDoesNotBlockConcurrentSubscribe},
     };
 
