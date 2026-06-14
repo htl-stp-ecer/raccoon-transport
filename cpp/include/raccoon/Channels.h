@@ -80,6 +80,12 @@ namespace raccoon::Channels
     constexpr auto BEMF_ENABLED_CMD = "raccoon/cmd/feature/bemf_enabled";
     constexpr auto BEMF_ENABLED = "raccoon/feature/bemf_enabled";
 
+    // Chassis velocity command (body frame [vx (m/s), vy (m/s), wz (rad/s)],
+    // vector3f_t). Drives MOT_MODE_CHASSIS on the STM32: the firmware maps this
+    // to per-wheel setpoints via forward kinematics and runs the per-motor PID,
+    // so the full chassis velocity loop closes on-MCU. Global (not port-indexed).
+    constexpr auto CHASSIS_VELOCITY_CMD = "raccoon/chassis/velocity_cmd";
+
     // Parametric channels (port-indexed)
     using PortId = int;
 
