@@ -11,6 +11,7 @@ class kinematics_config_t:
     inv_matrix: list[float] = field(default_factory=lambda: [0.0] * 12)
     ticks_to_rad: list[float] = field(default_factory=lambda: [0.0] * 4)
     fwd_matrix: list[float] = field(default_factory=lambda: [0.0] * 12)
+    bemf_offset: list[float] = field(default_factory=lambda: [0.0] * 4)
 
     def encode(self) -> bytes:
         return b"".join(
@@ -19,6 +20,7 @@ class kinematics_config_t:
                 *(pack_f32(value) for value in self.inv_matrix),
                 *(pack_f32(value) for value in self.ticks_to_rad),
                 *(pack_f32(value) for value in self.fwd_matrix),
+                *(pack_f32(value) for value in self.bemf_offset),
             ]
         )
 
@@ -28,6 +30,7 @@ class kinematics_config_t:
         inv_matrix: list[float] = []
         ticks_to_rad: list[float] = []
         fwd_matrix: list[float] = []
+        bemf_offset: list[float] = []
         for _ in range(12):
             value, offset = read_f32(data, offset)
             inv_matrix.append(value)
@@ -37,9 +40,13 @@ class kinematics_config_t:
         for _ in range(12):
             value, offset = read_f32(data, offset)
             fwd_matrix.append(value)
+        for _ in range(4):
+            value, offset = read_f32(data, offset)
+            bemf_offset.append(value)
         return cls(
             timestamp=timestamp,
             inv_matrix=inv_matrix,
             ticks_to_rad=ticks_to_rad,
             fwd_matrix=fwd_matrix,
+            bemf_offset=bemf_offset,
         )

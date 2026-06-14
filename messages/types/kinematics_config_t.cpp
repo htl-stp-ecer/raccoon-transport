@@ -6,7 +6,7 @@ namespace raccoon
 {
     int kinematics_config_t::encoded_size() const noexcept
     {
-        return 8 + 12 * 4 + 4 * 4 + 12 * 4;
+        return 8 + 12 * 4 + 4 * 4 + 12 * 4 + 4 * 4;
     }
 
     int kinematics_config_t::encode(uint8_t* buf, int buf_len) const noexcept
@@ -16,6 +16,7 @@ namespace raccoon
         for (float value : inv_matrix) if (!writer.put_f32(value)) return -1;
         for (float value : ticks_to_rad) if (!writer.put_f32(value)) return -1;
         for (float value : fwd_matrix) if (!writer.put_f32(value)) return -1;
+        for (float value : bemf_offset) if (!writer.put_f32(value)) return -1;
         return writer.written();
     }
 
@@ -26,6 +27,7 @@ namespace raccoon
         for (float& value : inv_matrix) if (!reader.get_f32(value)) return -1;
         for (float& value : ticks_to_rad) if (!reader.get_f32(value)) return -1;
         for (float& value : fwd_matrix) if (!reader.get_f32(value)) return -1;
+        for (float& value : bemf_offset) if (!reader.get_f32(value)) return -1;
         return reader.consumed();
     }
 }
