@@ -31,6 +31,7 @@
 #include "raccoon/Transport.h"
 
 #include "raccoon/Channels.h"
+#include "raccoon/Dedup.h"
 #include "raccoon/raccoon_ring.h"
 
 #include <linux/futex.h>
@@ -40,6 +41,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -79,6 +81,9 @@ namespace raccoon
             // detect outgrowth and re-create the writer with a larger
             // ring instead of dropping the frame.
             uint32_t max_payload = 0;
+            // Last value bytes published with deduplicate=true on this
+            // channel — see raccoon::dedup::shouldDrop.
+            dedup::LastPayload dedupState;
         };
         struct SubEntry
         {
@@ -105,6 +110,11 @@ namespace raccoon
         // its subscriber list (or notices the stop request) without any
         // periodic polling. Bumped via Transport::wakeControl().
         std::atomic<uint32_t> controlSeq{0};
+
+        // Count of value-channel publishes dropped because their payload
+        // was byte-identical to the previous one (deduplicate=true).
+        // Surfaced via getAndResetStats().publishesDeduplicated.
+        std::atomic<uint64_t> dedupCount{0};
 
         // ---- Stats (mostly unchanged from the iceoryx2 version) -------
         struct ChannelStatsAccumulator
@@ -210,7 +220,7 @@ namespace raccoon
                                         "/dev/shm not writable)\n";
                 return nullptr;
             }
-            publishers.emplace(channel, PubEntry{w, (uint32_t)want});
+            publishers.emplace(channel, PubEntry{w, (uint32_t)want, {}});
             return w;
         }
 
@@ -308,12 +318,30 @@ namespace raccoon
     }
 
     bool Transport::publishRaw(const std::string& channel, const void* data,
-                               int dataLen, const PublishOptions& /*options*/)
+                               int dataLen, const PublishOptions& options)
     {
         if (!impl_ || !impl_->isAlive() || !data || dataLen <= 0) return false;
         std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
         rrb_writer_t* w = impl_->writerFor(channel, (size_t)dataLen);
         if (!w) return false;
+
+        // Deduplication: when the caller opts in, drop value-channel
+        // publishes whose payload is byte-identical to the previous one.
+        // Command channels are never deduplicated; the policy (including
+        // the timestamp-skipping comparison) lives in raccoon::dedup so the
+        // Dart FFI bridge shares exactly the same behaviour.
+        if (options.deduplicate)
+        {
+            auto it = impl_->publishers.find(channel);
+            if (it != impl_->publishers.end() &&
+                dedup::shouldDrop(channel, data, static_cast<size_t>(dataLen),
+                                  it->second.dedupState))
+            {
+                impl_->dedupCount.fetch_add(1, std::memory_order_relaxed);
+                return true;  // identical value — drop, report success
+            }
+        }
+
         int rc = rrb_writer_publish(w, data, static_cast<size_t>(dataLen));
         if (rc != 0)
         {
@@ -655,7 +683,8 @@ namespace raccoon
             out.spin.maxUs = impl_->spinMaxUs;
             out.spin.avgUs = impl_->spinSumUs / (int64_t)impl_->spinCount;
         }
-        out.publishesDeduplicated = 0;  // legacy field, raccoon_ring has no dedup
+        out.publishesDeduplicated =
+            impl_->dedupCount.exchange(0, std::memory_order_relaxed);
 
         for (auto& [ch, acc] : impl_->channelStats) {
             TransportStats::Channel c{};

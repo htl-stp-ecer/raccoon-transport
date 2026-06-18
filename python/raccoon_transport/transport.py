@@ -9,7 +9,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
-from .channels import ProtocolChannels
+from .channels import Channels, ProtocolChannels
 from .types.raccoon import ack_t, envelope_t, retain_request_t
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,9 @@ class Transport:
         self._pending: list[dict] = []
         self._dedup_ring: deque[str] = deque(maxlen=1000)
         self._dedup_set: set[str] = set()
+        # Last value bytes published with deduplicate=True per channel,
+        # stored WITHOUT the leading 8-byte timestamp (see publish()).
+        self._last_value: dict[str, bytes] = {}
 
         self._lcm.subscribe(ProtocolChannels.RETAIN_REQUEST, self._on_retain_request)
         self._lcm.subscribe(ProtocolChannels.ACK, self._on_ack)
@@ -99,6 +102,7 @@ class Transport:
         *,
         reliable: bool = False,
         retained: bool = False,
+        deduplicate: bool = False,
         retry_interval_ms: int = 100,
         max_retries: int = 10,
     ):
@@ -109,6 +113,17 @@ class Transport:
             pass
 
         encoded = message.encode()
+
+        # Deduplication: drop byte-identical VALUE-channel payloads. Command
+        # channels are never deduplicated (Channels.is_command_channel). The
+        # comparison skips the leading 8-byte timestamp every raccoon value
+        # type carries; mirrors raccoon::dedup in the C++ transport.
+        if deduplicate and not Channels.is_command_channel(channel):
+            key = encoded[8:] if len(encoded) > 8 else encoded
+            if self._last_value.get(channel) == key:
+                return
+            self._last_value[channel] = key
+
         if reliable:
             self._reliable_publish(channel, encoded, retry_interval_ms, max_retries)
         else:

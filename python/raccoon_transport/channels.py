@@ -117,6 +117,18 @@ class Channels:
     def motor_done(port: int) -> str:
         return f"raccoon/motor/{port}/done"
 
+    @staticmethod
+    def is_command_channel(channel: str) -> bool:
+        """Whether ``channel`` carries COMMANDS rather than VALUE data.
+
+        A channel is a command channel when its name ends in ``_cmd`` or
+        contains the ``/cmd/`` segment. Command channels are never
+        deduplicated — re-issuing the same command is meaningful and must
+        always be delivered. Mirrors ``raccoon::Channels::isCommandChannel``
+        in the C++ transport.
+        """
+        return channel.endswith("_cmd") or "/cmd/" in channel
+
 
 class ProtocolChannels:
     """Internal protocol channels used for reliable and retained delivery."""

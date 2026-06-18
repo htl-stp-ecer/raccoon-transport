@@ -51,10 +51,10 @@ typedef _PubCreateNative = Int8 Function(
 typedef _PubCreateDart = int Function(
     Pointer<Void> node, Pointer<Utf8> channel, Pointer<Pointer<Void>> outPub);
 
-typedef _PubSendNative = Int8 Function(
-    Pointer<Void> pub, Pointer<Uint8> data, Uint64 len);
-typedef _PubSendDart = int Function(
-    Pointer<Void> pub, Pointer<Uint8> data, int len);
+typedef _PubSendExNative = Int8 Function(
+    Pointer<Void> pub, Pointer<Uint8> data, Uint64 len, Int32 deduplicate);
+typedef _PubSendExDart = int Function(
+    Pointer<Void> pub, Pointer<Uint8> data, int len, int deduplicate);
 
 typedef _PubDestroyNative = Void Function(Pointer<Void> pub);
 typedef _PubDestroyDart = void Function(Pointer<Void> pub);
@@ -81,8 +81,8 @@ final _NodeDestroyDart _nodeDestroy = _lib
 final _PubCreateDart _pubCreate = _lib
     .lookupFunction<_PubCreateNative, _PubCreateDart>('raccoon_ring_bridge_publisher_create');
 
-final _PubSendDart _pubSend = _lib
-    .lookupFunction<_PubSendNative, _PubSendDart>('raccoon_ring_bridge_publisher_send');
+final _PubSendExDart _pubSendEx = _lib
+    .lookupFunction<_PubSendExNative, _PubSendExDart>('raccoon_ring_bridge_publisher_send_ex');
 
 final _PubDestroyDart _pubDestroy = _lib
     .lookupFunction<_PubDestroyNative, _PubDestroyDart>('raccoon_ring_bridge_publisher_destroy');
@@ -151,13 +151,16 @@ class RingPublisher {
 
   Pointer<Void> get handle => _handle;
 
-  int send(Uint8List data) {
+  int send(Uint8List data, {bool deduplicate = false}) {
     final dataLen = data.length;
     final dataPtr = calloc<Uint8>(dataLen);
     for (var i = 0; i < dataLen; i++) {
       dataPtr[i] = data[i];
     }
-    final ret = _pubSend(_handle, dataPtr, dataLen);
+    // Dedup policy (command-channel guard + timestamp-skipping compare)
+    // lives entirely in the C++ bridge (raccoon::dedup) — Dart just
+    // forwards the flag rather than reimplementing it.
+    final ret = _pubSendEx(_handle, dataPtr, dataLen, deduplicate ? 1 : 0);
     calloc.free(dataPtr);
     return ret;
   }
