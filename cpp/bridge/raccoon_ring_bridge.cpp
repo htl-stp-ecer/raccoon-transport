@@ -11,6 +11,7 @@
 // descriptors, no state machine to wedge.
 
 #include "raccoon_ring_bridge.h"
+#include "raccoon/Dedup.h"
 #include "raccoon/raccoon_ring.h"
 
 #include <atomic>
@@ -50,6 +51,13 @@ struct SubChannelState {
     std::string channel_name;
 };
 
+// Per-channel publisher state: the shared rrb_writer plus the last value
+// bytes for deduplication (see raccoon::dedup).
+struct PubChannelState {
+    rrb_writer_t* writer = nullptr;
+    raccoon::dedup::LastPayload dedupState;
+};
+
 struct BridgeNode {
     std::atomic<bool> stop{false};
 
@@ -76,9 +84,11 @@ struct BridgeNode {
     // Per-channel publisher writers. Lazy-create on first publish, then
     // reused (raccoon_ring is single-producer per channel, so multiple
     // Dart BridgePublisher handles on the same channel must share
-    // one rrb_writer).
+    // one rrb_writer). Each carries the last value bytes seen so
+    // deduplicate=true publishes can drop byte-identical repeats — using
+    // the shared raccoon::dedup policy, not a Dart reimplementation.
     std::mutex pubs_mtx;
-    std::unordered_map<std::string, rrb_writer_t*> pubs;
+    std::unordered_map<std::string, PubChannelState> pubs;
 };
 
 struct BridgePublisher {
@@ -206,8 +216,8 @@ void raccoon_ring_bridge_node_destroy(void* n) {
     }
     {
         std::lock_guard<std::mutex> lk(node->pubs_mtx);
-        for (auto& [_, w] : node->pubs) {
-            if (w) rrb_writer_destroy(w);
+        for (auto& [_, pe] : node->pubs) {
+            if (pe.writer) rrb_writer_destroy(pe.writer);
         }
         node->pubs.clear();
     }
@@ -227,6 +237,11 @@ int raccoon_ring_bridge_publisher_create(void* n, const char* channel, void** ou
 }
 
 int raccoon_ring_bridge_publisher_send(void* p, const uint8_t* data, size_t len) {
+    return raccoon_ring_bridge_publisher_send_ex(p, data, len, /*deduplicate=*/0);
+}
+
+int raccoon_ring_bridge_publisher_send_ex(void* p, const uint8_t* data,
+                                          size_t len, int deduplicate) {
     if (!p || !data || len == 0) return -1;
     auto* pub = static_cast<BridgePublisher*>(p);
     // The whole publish runs under pubs_mtx: rrb_writer is not thread-safe,
@@ -234,22 +249,30 @@ int raccoon_ring_bridge_publisher_send(void* p, const uint8_t* data, size_t len)
     // thread publishing on the same channel must never see the dangling
     // handle. Dart is single-isolate so there is no contention in practice.
     std::lock_guard<std::mutex> lk(pub->node->pubs_mtx);
-    rrb_writer_t* w;
+    PubChannelState* pe;
     auto it = pub->node->pubs.find(pub->channel);
     if (it == pub->node->pubs.end()) {
         size_t slots = 0, want = 0;
         ring_dims(len, slots, want);
-        w = rrb_writer_create(pub->channel.c_str(),
-                              (uint32_t)slots, (uint32_t)want);
-        if (!w) {
+        rrb_writer_t* nw = rrb_writer_create(pub->channel.c_str(),
+                                             (uint32_t)slots, (uint32_t)want);
+        if (!nw) {
             log_line("publisher_send: rrb_writer_create('%s') failed",
                      pub->channel.c_str());
             return -2;
         }
-        pub->node->pubs[pub->channel] = w;
+        pe = &pub->node->pubs[pub->channel];
+        pe->writer = nw;
     } else {
-        w = it->second;
+        pe = &it->second;
     }
+    // Drop byte-identical value-channel repeats when the caller opted in.
+    // Command channels are never deduplicated (raccoon::dedup::shouldDrop).
+    if (deduplicate &&
+        raccoon::dedup::shouldDrop(pub->channel, data, len, pe->dedupState)) {
+        return 0;  // duplicate value — report success, publish nothing
+    }
+    rrb_writer_t* w = pe->writer;
     int rc = rrb_writer_publish(w, data, len);
     if (rc != 0) {
         // Only failure path in rrb_writer_publish is "payload too big for
@@ -266,12 +289,12 @@ int raccoon_ring_bridge_publisher_send(void* p, const uint8_t* data, size_t len)
         w = rrb_writer_create(pub->channel.c_str(),
                               (uint32_t)slots, (uint32_t)want);
         if (!w) {
-            pub->node->pubs.erase(pub->channel);
+            pub->node->pubs.erase(pub->channel);  // invalidates pe
             log_line("publisher_send: rrb_writer_create('%s') failed during grow",
                      pub->channel.c_str());
             return -2;
         }
-        pub->node->pubs[pub->channel] = w;
+        pe->writer = w;  // references into unordered_map stay valid across insert
         rc = rrb_writer_publish(w, data, len);
         if (rc != 0) {
             log_line("publisher_send('%s') still rejected %zu-byte payload after resize",

@@ -30,10 +30,16 @@ class RaccoonRingTransport {
     return transport;
   }
 
-  int publish(String channel, Uint8List data) {
+  /// Publish [data] on [channel].
+  ///
+  /// When [deduplicate] is true, a byte-identical value-channel payload is
+  /// dropped by the C++ bridge (command channels are never deduplicated —
+  /// see `raccoon::dedup`). The dedup decision lives in C++; this only
+  /// forwards the flag.
+  int publish(String channel, Uint8List data, {bool deduplicate = false}) {
     final pub = _publishers.putIfAbsent(
         channel, () => RingPublisher(_node, channel));
-    return pub.send(data);
+    return pub.send(data, deduplicate: deduplicate);
   }
 
   TransportSubscription subscribe(String channel, MessageHandler handler) {

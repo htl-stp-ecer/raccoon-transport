@@ -20,6 +20,11 @@ namespace raccoon
     {
         RACCOON_DEPRECATED_RELIABLE bool reliable = false;
         bool retained = false;
+        /// Drop publishes whose payload (excluding the 8-byte timestamp) is
+        /// byte-identical to the previous one on this channel. Honoured only
+        /// for VALUE channels — command channels (Channels::isCommandChannel)
+        /// are never deduplicated, so an identical re-issued command always
+        /// reaches the subscriber. No-op on command channels.
         bool deduplicate = false;
         RACCOON_DEPRECATED_RELIABLE std::chrono::milliseconds retryInterval{100};
         RACCOON_DEPRECATED_RELIABLE uint32_t maxRetries = 10;

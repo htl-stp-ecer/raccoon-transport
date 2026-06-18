@@ -1,3 +1,4 @@
+#include "raccoon/Channels.h"
 #include "raccoon/Options.h"
 #include "raccoon/Transport.h"
 #include "raccoon/raccoon_ring.h"
@@ -307,12 +308,92 @@ namespace
         require(subscribeFuture.get(), "late subscribe should succeed");
         require(secondSubscribeInstalled.load(), "late subscribe should be installed");
     }
+
+    void testValueChannelDeduplicatesIdenticalPayloads()
+    {
+        // A value channel with deduplicate=true must drop publishes whose
+        // value is unchanged, even though each carries a fresh timestamp
+        // (the dedup comparison excludes the leading 8-byte stamp).
+        auto transport = raccoon::Transport::create("memq://");
+        const std::string channel = "raccoon/test/dedup_value";
+        require(!raccoon::Channels::isCommandChannel(channel),
+                "value channel must not classify as a command channel");
+
+        int callbacks = 0;
+        int lastValue = 0;
+        require(transport.subscribe<raccoon::scalar_i32_t>(channel,
+            [&](const raccoon::scalar_i32_t& msg)
+            {
+                ++callbacks;
+                lastValue = msg.value;
+            }),
+            "value subscribe failed");
+
+        const raccoon::PublishOptions dedup{.deduplicate = true};
+
+        raccoon::scalar_i32_t a;
+        a.timestamp = 1000;  // distinct timestamps prove the stamp is ignored
+        a.value = 42;
+        require(transport.publish(channel, a, dedup), "first value publish failed");
+
+        raccoon::scalar_i32_t b;
+        b.timestamp = 2000;
+        b.value = 42;  // same value -> must be deduplicated
+        require(transport.publish(channel, b, dedup), "second value publish failed");
+
+        spinTransport(transport);
+        require(callbacks == 1, "identical value should be delivered only once");
+
+        auto stats = transport.getAndResetStats();
+        require(stats.publishesDeduplicated == 1,
+                "one publish should be counted as deduplicated");
+
+        raccoon::scalar_i32_t c;
+        c.timestamp = 3000;
+        c.value = 43;  // changed value -> must be delivered
+        require(transport.publish(channel, c, dedup), "third value publish failed");
+        spinTransport(transport);
+        require(callbacks == 2, "changed value should be delivered");
+        require(lastValue == 43, "subscriber should see the changed value");
+    }
+
+    void testCommandChannelNeverDeduplicates()
+    {
+        // A command channel must deliver every publish even with
+        // deduplicate=true and a byte-identical payload — re-issuing the
+        // same command is meaningful and must reach the subscriber.
+        auto transport = raccoon::Transport::create("memq://");
+        const std::string channel = "raccoon/test/thing_cmd";
+        require(raccoon::Channels::isCommandChannel(channel),
+                "channel ending in _cmd must classify as a command channel");
+
+        int callbacks = 0;
+        require(transport.subscribe<raccoon::scalar_i32_t>(channel,
+            [&](const raccoon::scalar_i32_t&) { ++callbacks; }),
+            "command subscribe failed");
+
+        const raccoon::PublishOptions dedup{.deduplicate = true};
+        raccoon::scalar_i32_t cmd;
+        cmd.timestamp = 5000;
+        cmd.value = 7;
+        require(transport.publish(channel, cmd, dedup), "first command publish failed");
+        require(transport.publish(channel, cmd, dedup), "second command publish failed");
+
+        spinTransport(transport);
+        require(callbacks == 2, "identical commands must both be delivered");
+
+        auto stats = transport.getAndResetStats();
+        require(stats.publishesDeduplicated == 0,
+                "command channel must never count deduplicated publishes");
+    }
 }  // namespace
 
 int main()
 {
     const std::vector<std::pair<std::string, std::function<void()>>> tests = {
         {"typed subscription records and resets latency stats", testTypedSubscriptionRecordsAndResetsLatencyStats},
+        {"value channel deduplicates identical payloads", testValueChannelDeduplicatesIdenticalPayloads},
+        {"command channel never deduplicates", testCommandChannelNeverDeduplicates},
         {"heartbeat stays on time while writers flood", testHeartbeatStaysOnTimeWhileWritersFlood},
         {"subscriber callback can publish back (recursive)", testSubscriberCallbackCanPublishBack},
         {"oversized publish grows ring and republishes", testOversizedPublishGrowsRingAndRepublishes},

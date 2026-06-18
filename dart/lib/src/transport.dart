@@ -9,12 +9,18 @@ import 'reliable.dart';
 class PublishOptions {
   final bool reliable;
   final bool retained;
+
+  /// Drop byte-identical VALUE-channel payloads (command channels are never
+  /// deduplicated). The decision is made in C++ (`raccoon::dedup`) on the
+  /// ring transport; this flag is just forwarded.
+  final bool deduplicate;
   final Duration retryInterval;
   final int maxRetries;
 
   const PublishOptions({
     this.reliable = false,
     this.retained = false,
+    this.deduplicate = false,
     this.retryInterval = const Duration(milliseconds: 100),
     this.maxRetries = 10,
   });

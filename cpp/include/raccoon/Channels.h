@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string>
+#include <string_view>
 
 namespace raccoon::Channels
 {
@@ -193,6 +194,33 @@ namespace raccoon::Channels
     inline const std::string& motorDone(const PortId port)
     {
         RACCOON_CACHED_CHANNEL("raccoon/motor/", "/done");
+    }
+
+    // Command-vs-value classification.
+    //
+    // A channel carries COMMANDS (imperative requests — "drive at v",
+    // "set mode", "reset odometry") when its name ends in "_cmd" or
+    // contains the "/cmd/" segment. Everything else is a VALUE/telemetry
+    // channel (sensor readings, odometry, state feedback).
+    //
+    // The distinction matters for deduplication: byte-identical VALUE
+    // frames may be dropped (the consumer's view is unchanged), but a
+    // COMMAND must never be deduplicated. Re-sending the same command is
+    // semantically meaningful — e.g. re-asserting "velocity 0" after the
+    // MCU drifted, or repeating a stop — and dropping the repeat would
+    // silently strand the robot in a stale state. The transport's
+    // deduplicate path consults this so command channels are skipped
+    // unconditionally, regardless of the per-publish `deduplicate` flag.
+    inline bool isCommandChannel(const std::string& channel)
+    {
+        constexpr std::string_view kSuffix = "_cmd";
+        if (channel.size() >= kSuffix.size() &&
+            channel.compare(channel.size() - kSuffix.size(),
+                            kSuffix.size(), kSuffix) == 0)
+        {
+            return true;
+        }
+        return channel.find("/cmd/") != std::string::npos;
     }
 
     // Protocol channels (internal)
