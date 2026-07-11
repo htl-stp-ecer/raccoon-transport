@@ -54,6 +54,13 @@ namespace raccoon
         Callback callback{};
         Spin spin{};
         uint64_t publishesDeduplicated = 0;
+        // Reliable-delivery visibility. `reliableRetransmits` counts every
+        // re-send of an un-acked command; a non-zero value means commands
+        // are being lost on first send and recovered by the retry layer.
+        // `reliableDropped` counts commands that exhausted maxRetries without
+        // an ACK — a genuine, unrecovered command loss worth chasing.
+        uint64_t reliableRetransmits = 0;
+        uint64_t reliableDropped = 0;
         std::vector<Channel> channels{};
     };
 

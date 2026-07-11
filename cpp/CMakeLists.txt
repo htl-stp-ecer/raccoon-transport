@@ -55,4 +55,22 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_reader_recv_robust_tests
         COMMAND raccoon_transport_reader_recv_robust_tests)
+
+    add_executable(raccoon_transport_single_cold_send_tests
+        tests/test_single_cold_send.cpp)
+    target_link_libraries(raccoon_transport_single_cold_send_tests PRIVATE
+        raccoon_transport)
+    target_include_directories(raccoon_transport_single_cold_send_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_single_cold_send_tests
+        COMMAND raccoon_transport_single_cold_send_tests)
+
+    add_executable(raccoon_transport_reliable_delivery_tests
+        tests/test_reliable_delivery.cpp)
+    target_link_libraries(raccoon_transport_reliable_delivery_tests PRIVATE
+        raccoon_transport)
+    target_include_directories(raccoon_transport_reliable_delivery_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_reliable_delivery_tests
+        COMMAND raccoon_transport_reliable_delivery_tests)
 endif()
