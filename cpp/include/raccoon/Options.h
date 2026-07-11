@@ -40,8 +40,13 @@ namespace raccoon
         /// are never deduplicated, so an identical re-issued command always
         /// reaches the subscriber. No-op on command channels.
         bool deduplicate = false;
+        // Re-send every `retryInterval` until the subscriber ACKs. The ACK is
+        // what stops retransmission; `maxRetries` is only a backstop for when
+        // NO ack ever arrives (subscriber dead) so the pending queue can't grow
+        // without bound. 20 × 50 ms ≈ 1 s of retrying before giving up loudly —
+        // far longer than the ~ms ACK round-trip a live subscriber needs.
         std::chrono::milliseconds retryInterval{50};
-        uint32_t maxRetries = 10;
+        uint32_t maxRetries = 20;
     };
 
     /** Per-subscription features such as reliable delivery and retained replay. */

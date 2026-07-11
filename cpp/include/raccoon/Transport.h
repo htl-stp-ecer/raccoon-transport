@@ -107,6 +107,24 @@ namespace raccoon
         bool subscribeRaw(const std::string& channel, RawHandler handler,
                           const SubscribeOptions& options = {});
 
+        /** Reliable-delivery lifecycle events, for logging/telemetry. */
+        enum class ReliableEvent
+        {
+            Retransmit,  ///< a reliable command was not ACKed in time, re-sent
+            GaveUp       ///< maxRetries hit without an ACK — command lost
+        };
+        using ReliableEventHandler = std::function<void(
+            ReliableEvent event, const std::string& channel, int64_t key,
+            uint32_t attempts)>;
+        /**
+         * Register a callback fired on every reliable retransmit and give-up.
+         * Lets the host (e.g. libstp) route these into its own structured log
+         * (libstp.jsonl) instead of the default cerr fallback. The callback
+         * runs on the transport's internal reliability thread — keep it cheap
+         * and thread-safe (a log call is fine). Pass {} to clear.
+         */
+        void setReliableEventHandler(ReliableEventHandler handler);
+
         template <TransportMessage T>
         bool publish(const std::string& channel, const T& message,
                      const PublishOptions& options = {})

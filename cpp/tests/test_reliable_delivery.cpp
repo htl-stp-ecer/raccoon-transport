@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -268,6 +269,50 @@ namespace
                 "publisher gave up despite the child receiving the command");
     }
 
+    // 5. Reliable events reach a registered handler (the hook libstp uses to
+    //    route retransmit/give-up into libstp.jsonl). With no subscriber the
+    //    publisher must report at least one Retransmit and finally a GaveUp
+    //    for the right channel.
+    void testReliableEventHandler()
+    {
+        cleanAll();
+        raccoon::Transport pub = raccoon::Transport::create();
+
+        std::mutex m;
+        int retransmits = 0;
+        int gaveUp = 0;
+        std::string lastChannel;
+        pub.setReliableEventHandler(
+            [&](raccoon::Transport::ReliableEvent ev, const std::string& ch,
+                int64_t, uint32_t) {
+                std::lock_guard<std::mutex> lk(m);
+                lastChannel = ch;
+                if (ev == raccoon::Transport::ReliableEvent::GaveUp) ++gaveUp;
+                else ++retransmits;
+            });
+
+        auto payload = makePayload(/*ts=*/5000, /*value=*/-1300);
+        raccoon::PublishOptions po;
+        po.reliable = true;
+        po.retryInterval = std::chrono::milliseconds(20);
+        po.maxRetries = 3;
+        require(pub.publishRaw(kChannel, payload.data(),
+                               static_cast<int>(payload.size()), po),
+                "publish failed");
+
+        require(waitFor(
+                    [&] {
+                        std::lock_guard<std::mutex> lk(m);
+                        return gaveUp >= 1;
+                    },
+                    std::chrono::seconds(2)),
+                "handler never received a GaveUp event");
+        std::lock_guard<std::mutex> lk(m);
+        require(retransmits >= 1, "handler received no Retransmit event");
+        require(lastChannel == kChannel,
+                "handler got wrong channel: " + lastChannel);
+    }
+
     void runTest(const char* name, const std::function<void()>& fn)
     {
         try
@@ -291,6 +336,7 @@ int main()
     runTest("test_reliable_gives_up_without_subscriber",
             testReliableGivesUpWithoutSubscriber);
     runTest("test_reliable_cross_process", testReliableCrossProcess);
+    runTest("test_reliable_event_handler", testReliableEventHandler);
     cleanAll();
     return 0;
 }

@@ -224,6 +224,11 @@ namespace raccoon
         bool reliableStarted = false;
         std::atomic<uint64_t> reliableRetransmits{0};
         std::atomic<uint64_t> reliableDropped{0};
+        // Collected under apiMutex in tickResends, fired to reliableHandler
+        // (or cerr) OUTSIDE the lock in reliableLoop.
+        struct RelEvt { bool gaveUp; std::string channel; int64_t key;
+                        uint32_t attempts; };
+        Transport::ReliableEventHandler reliableHandler;
 
         // Lazily open the ACK reader and start the retry thread. Call under
         // apiMutex. Only the PUBLISH side needs this (it has pending entries
@@ -243,11 +248,40 @@ namespace raccoon
         {
             while (reliableThreadRun.load())
             {
+                std::vector<RelEvt> events;
+                Transport::ReliableEventHandler handler;
                 {
                     std::lock_guard<std::recursive_mutex> lk(apiMutex);
                     if (!running.load()) break;
                     drainAcks();
-                    tickResends();
+                    tickResends(events);
+                    handler = reliableHandler;
+                }
+                // Fire events OUTSIDE the lock: the handler may log / allocate
+                // / even publish, and must not run under apiMutex.
+                for (const auto& e : events)
+                {
+                    if (handler)
+                    {
+                        handler(e.gaveUp ? Transport::ReliableEvent::GaveUp
+                                         : Transport::ReliableEvent::Retransmit,
+                                e.channel, e.key, e.attempts);
+                    }
+                    else if (e.gaveUp)
+                    {
+                        std::cerr << "raccoon::Transport: RELIABLE command on '"
+                                  << e.channel << "' (ts=" << e.key
+                                  << ") NOT acked after " << e.attempts
+                                  << " attempts — GIVING UP; the subscriber "
+                                     "never received it\n";
+                    }
+                    else
+                    {
+                        std::cerr << "raccoon::Transport: reliable command on '"
+                                  << e.channel << "' (ts=" << e.key
+                                  << ") not acked — retransmitting (attempt "
+                                  << e.attempts << ")\n";
+                    }
                 }
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(kReliabilityTickMs));
@@ -276,8 +310,9 @@ namespace raccoon
             }
         }
 
-        // Re-send due pending commands, drop exhausted ones. Call under apiMutex.
-        void tickResends()
+        // Re-send due pending commands, drop exhausted ones. Call under
+        // apiMutex. Appends log-worthy events to `out` (fired outside the lock).
+        void tickResends(std::vector<RelEvt>& out)
         {
             if (pendingReliable.empty()) return;
             const auto now = std::chrono::steady_clock::now();
@@ -292,12 +327,8 @@ namespace raccoon
                 }
                 if (p.attempts >= p.maxRetries)
                 {
-                    std::cerr << "raccoon::Transport: RELIABLE command on '"
-                              << p.channel << "' (ts=" << p.key
-                              << ") NOT acked after " << p.attempts
-                              << " attempts — GIVING UP; the subscriber never "
-                                 "received it\n";
                     reliableDropped.fetch_add(1, std::memory_order_relaxed);
+                    out.push_back({true, p.channel, p.key, p.attempts});
                     continue;  // drop
                 }
                 rrb_writer_t* w = writerFor(p.channel, p.payload.size());
@@ -305,13 +336,12 @@ namespace raccoon
                 p.lastSent = now;
                 ++p.attempts;
                 reliableRetransmits.fetch_add(1, std::memory_order_relaxed);
+                // Emit a single event on the first retransmit so a recovered
+                // one-shot drop is visible without spamming a line per attempt.
                 if (!p.warnedRetransmit)
                 {
                     p.warnedRetransmit = true;
-                    std::cerr << "raccoon::Transport: reliable command on '"
-                              << p.channel << "' (ts=" << p.key
-                              << ") not acked within " << p.retryInterval.count()
-                              << "ms — retransmitting\n";
+                    out.push_back({false, p.channel, p.key, p.attempts});
                 }
                 keep.push_back(std::move(p));
             }
@@ -625,6 +655,13 @@ namespace raccoon
         // an existing channel doesn't need a wake.
         if (fresh_channel) wakeControl();
         return true;
+    }
+
+    void Transport::setReliableEventHandler(ReliableEventHandler handler)
+    {
+        if (!impl_) return;
+        std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+        impl_->reliableHandler = std::move(handler);
     }
 
     int Transport::spinOnce(int timeoutMs)
