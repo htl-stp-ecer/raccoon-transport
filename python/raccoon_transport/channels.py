@@ -54,6 +54,32 @@ class Channels:
         return f"raccoon/servo/{port}/position_cmd"
 
     @staticmethod
+    def servo_smooth_position_command(port: int) -> str:
+        # vector3f_t: x = target deg, y = speed deg/s, z = easing type
+        return f"raccoon/servo/{port}/smooth_cmd"
+
+    # Bus servos (Feetech STS, e.g. STS3215, port in servo mode 3).
+    @staticmethod
+    def servo_velocity_command(port: int) -> str:
+        # scalar_f_t: continuous rotation, signed deg/s
+        return f"raccoon/servo/{port}/velocity_cmd"
+
+    @staticmethod
+    def servo_done(port: int) -> str:
+        # scalar_i32_t: 0 = running, 1 = reached goal, 2 = stopped short (blocked)
+        return f"raccoon/servo/{port}/done"
+
+    @staticmethod
+    def servo_feedback(port: int) -> str:
+        # vector3f_t: x = position deg (multi-turn), y = speed deg/s, z = load %
+        return f"raccoon/servo/{port}/feedback"
+
+    @staticmethod
+    def servo_health(port: int) -> str:
+        # vector3f_t: x = voltage V, y = temperature C, z = error bits (-1 = not connected)
+        return f"raccoon/servo/{port}/health"
+
+    @staticmethod
     def back_emf(port: int) -> str:
         return f"raccoon/bemf/{port}/value"
 
