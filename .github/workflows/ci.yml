@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  VERSION: "0.1.${{ github.run_number }}"
+  VERSION: "${{ github.run_number }}"
 
 jobs:
   build-and-test:
