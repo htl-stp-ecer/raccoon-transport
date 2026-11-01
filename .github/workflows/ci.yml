@@ -140,3 +140,31 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  # Tell the components that compile raccoon-transport that a new release is out,
+  # so each one can open a pull request that moves its submodule to the new tag.
+  # Runs after PyPI so the tag and the package both exist. A failure here only
+  # warns: the release itself is already published.
+  notify-components:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch transport-released
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "::warning::GH_PAT is not set; components were not notified"
+            exit 0
+          fi
+          for repo in raccoon-lib stm32-data-reader botui; do
+            if ! curl -fsS -X POST \
+              -H "Authorization: Bearer $GH_PAT" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/htl-stp-ecer/$repo/dispatches" \
+              -d '{"event_type":"transport-released","client_payload":{"version":"${{ env.VERSION }}","tag":"v${{ env.VERSION }}","sha":"${{ github.sha }}"}}'
+            then
+              echo "::warning::could not notify $repo"
+            fi
+          done
