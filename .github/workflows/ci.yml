@@ -150,17 +150,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Create an app token for the components
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: htl-stp-ecer
+          repositories: raccoon-lib,stm32-data-reader,botui
+          permission-contents: write
+
       - name: Dispatch transport-released
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          if [ -z "$GH_PAT" ]; then
-            echo "::warning::GH_PAT is not set; components were not notified"
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::no app token; components were not notified"
             exit 0
           fi
           for repo in raccoon-lib stm32-data-reader botui; do
             if ! curl -fsS -X POST \
-              -H "Authorization: Bearer $GH_PAT" \
+              -H "Authorization: Bearer $TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/htl-stp-ecer/$repo/dispatches" \
               -d '{"event_type":"transport-released","client_payload":{"version":"${{ env.VERSION }}","tag":"v${{ env.VERSION }}","sha":"${{ github.sha }}"}}'
