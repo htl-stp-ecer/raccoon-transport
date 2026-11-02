@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT / "python"))
 from raccoon_transport import contract_check as cc  # noqa: E402
 
 VECTORS = json.loads((ROOT / "contract" / "check_vectors.json").read_text())
+# Version entries for every component name the tests below use (their version is "v1").
+VERSIONS = json.dumps({n: "v1" for n in ("raccoon-lib", "raccoon-cli", "stm32-data-reader", "a", "b")})
 
 
 class VectorTests(unittest.TestCase):
@@ -28,8 +30,9 @@ class VectorTests(unittest.TestCase):
                     bundle.parent.mkdir()
                     bundle.write_text(case["bundle"])
                 result = cc.check(
-                    defaults["component"],
-                    defaults["component_version"],
+                    case.get("component", defaults["component"]),
+                    case.get("component_version", defaults["component_version"]),
+                    bundle_key=case.get("bundle_key"),
                     own_hash=defaults["own_hash"],
                     own_version=defaults["own_version"],
                     bundle_file=str(bundle),
@@ -64,7 +67,7 @@ class StatusTests(unittest.TestCase):
         )
 
     def test_ok_writes_status_file(self):
-        self.run_check(text='{"contract_hash":"aaaa","bundle":"b"}')
+        self.run_check(text='{"contract_hash":"aaaa","bundle":"b","components":' + VERSIONS + '}')
         document = json.loads((self.dir / "run" / "raccoon-lib.json").read_text())
         self.assertEqual("ok", document["result"])
         self.assertEqual(os.getpid(), document["pid"])
@@ -73,12 +76,12 @@ class StatusTests(unittest.TestCase):
 
     def test_mismatch_raises_and_still_writes_status(self):
         with self.assertRaises(cc.ContractError) as raised:
-            self.run_check(text='{"contract_hash":"bbbb"}')
+            self.run_check(text='{"contract_hash":"bbbb","components":' + VERSIONS + '}')
         self.assertEqual("mismatch", raised.exception.result.result)
         self.assertEqual("mismatch", json.loads((self.dir / "run" / "raccoon-lib.json").read_text())["result"])
 
     def test_enforce_false_does_not_raise(self):
-        result = self.run_check(text='{"contract_hash":"bbbb"}', enforce=False)
+        result = self.run_check(text='{"contract_hash":"bbbb","components":' + VERSIONS + '}', enforce=False)
         self.assertTrue(result.refuse)
 
     def test_skipped_writes_nothing(self):
@@ -92,7 +95,7 @@ class StatusTests(unittest.TestCase):
     def test_unwritable_status_dir_does_not_stop_the_component(self):
         blocker = self.dir / "blocker"
         blocker.write_text("a file, not a directory")
-        self.bundle.write_text('{"contract_hash":"aaaa"}')
+        self.bundle.write_text('{"contract_hash":"aaaa","components":' + VERSIONS + '}')
         result = cc.startup_check(
             "raccoon-lib", "v1", persistent=False, status_directory=str(blocker / "run"),
             own_hash="aaaa", bundle_file=str(self.bundle), device_marker=str(self.dir / "image"),
@@ -100,7 +103,7 @@ class StatusTests(unittest.TestCase):
         self.assertEqual("ok", result.result)
 
     def test_exit_code_is_reserved_value(self):
-        result = self.run_check(text='{"contract_hash":"bbbb"}', enforce=False)
+        result = self.run_check(text='{"contract_hash":"bbbb","components":' + VERSIONS + '}', enforce=False)
         with self.assertRaises(SystemExit) as raised:
             cc.exit_if_refused(result)
         self.assertEqual(78, raised.exception.code)
@@ -145,7 +148,7 @@ class AggregateTests(unittest.TestCase):
         self.assertFalse(summary["ok"])
         self.assertEqual("file-missing", summary["bundle"]["error"])
 
-    bundle_text = '{"bundle":"b","contract_hash":"aaaa","components":{"raccoon-transport":"v9"}}'
+    bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa", "components": {"raccoon-transport": "v9", **json.loads(VERSIONS)}})
 
     def test_all_ok(self):
         self.status("raccoon-cli", "aaaa", True)
@@ -177,7 +180,7 @@ class AggregateTests(unittest.TestCase):
         self.assertFalse(self.agg()["components"][0]["active"])
 
     def test_dev_mode_reports_differing_hashes(self):
-        self.bundle_text = '{"contract_hash":"dev"}'
+        self.bundle_text = json.dumps({"contract_hash": "dev", "components": json.loads(VERSIONS)})
         self.status("a", "1111", True)
         self.status("b", "2222", True)
         summary = self.agg()

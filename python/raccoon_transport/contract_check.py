@@ -34,8 +34,9 @@ OK = "ok"
 MISMATCH = "mismatch"
 DEV_WARNING = "dev-warnung"
 BUNDLE_ERROR = "bundle-fehler"
+VERSION_MISMATCH = "version-mismatch"
 SKIPPED = "skipped"
-REFUSING = (MISMATCH, BUNDLE_ERROR)
+REFUSING = (MISMATCH, BUNDLE_ERROR, VERSION_MISMATCH)
 
 _REASON_TEXT = {
     "file-missing": "bundle file is missing",
@@ -43,6 +44,7 @@ _REASON_TEXT = {
     "field-missing": "bundle file has no contract_hash field",
     "field-empty": "bundle file has an empty contract_hash",
 }
+_VERSION_REASONS = ("version-field-missing", "version-field-empty")
 
 
 class ContractError(RuntimeError):
@@ -66,6 +68,8 @@ class CheckResult:
     reason: Optional[str]
     message: str
     bundle_file: str = DEFAULT_BUNDLE_FILE
+    bundle_key: str = ""
+    expected_component_version: Optional[str] = None
 
     @property
     def refuse(self) -> bool:
@@ -83,11 +87,22 @@ def _name(value: Optional[str]) -> str:
     return value if value else "unknown"
 
 
+def _normalize_version(value: Optional[str]) -> str:
+    """`v173` and `173` are the same version; nothing else is normalised."""
+    value = (value or "").strip()
+    return value[1:] if value[:1] in ("v", "V") else value
+
+
 def _message(r: CheckResult) -> str:
     if r.result == OK:
         return f"contract ok: {r.own_hash}"
     if r.result == SKIPPED:
         return "not running on a raccoon device; contract check skipped"
+    if r.result == DEV_WARNING and r.reason == "version-omitted":
+        return (
+            f"component version check omitted ('{r.bundle_key}' is 'dev' in the bundle): "
+            f"{r.component} {_name(r.component_version)} is not compared; mismatches are not enforced"
+        )
     if r.result == DEV_WARNING:
         return (
             "transport contract check is in dev mode (bundle field is 'dev'): "
@@ -101,6 +116,14 @@ def _message(r: CheckResult) -> str:
             f"{r.expected_hash} (transport {_name(r.expected_transport_version)}); "
             "update or reflash so all components match"
         )
+    if r.result == VERSION_MISMATCH:
+        return (
+            f"component version mismatch: {r.component} is {_name(r.component_version)} but bundle "
+            f"{_name(r.bundle)} expects {r.expected_component_version}; update or reflash so all components match"
+        )
+    if r.reason in _VERSION_REASONS:
+        what = "no version" if r.reason == "version-field-missing" else "an empty version"
+        return f"bundle check failed: bundle file has {what} for {r.bundle_key}: {r.bundle_file}"
     return f"transport contract check failed: {_REASON_TEXT[r.reason or 'file-unreadable']}: {r.bundle_file}"
 
 
@@ -108,6 +131,7 @@ def check(
     component: str,
     component_version: str,
     *,
+    bundle_key: Optional[str] = None,
     own_hash: Optional[str] = None,
     own_version: Optional[str] = None,
     bundle_file: Optional[str] = None,
@@ -131,6 +155,7 @@ def check(
         reason=None,
         message="",
         bundle_file=bundle_file,
+        bundle_key=bundle_key or component,
     )
 
     def done(outcome: str, reason: Optional[str] = None) -> CheckResult:
@@ -168,9 +193,28 @@ def check(
     if not expected:
         return done(BUNDLE_ERROR, "field-empty")
     result.expected_hash = expected
-    if expected == "dev":
+    contract_dev = expected == "dev"
+    if not contract_dev and expected != result.own_hash:
+        return done(MISMATCH)
+
+    # The component's own version against the bundle's entry for it. Independent of
+    # the contract: a dev contract does not excuse a wrong version, and 'dev' in the
+    # component's own field omits only this comparison.
+    entry = components.get(result.bundle_key) if isinstance(components, dict) else None
+    if not isinstance(entry, str):
+        return done(BUNDLE_ERROR, "version-field-missing")
+    entry = entry.strip()
+    if not entry:
+        return done(BUNDLE_ERROR, "version-field-empty")
+    result.expected_component_version = entry
+    version_omitted = entry == "dev"
+    if not version_omitted and _normalize_version(entry) != _normalize_version(component_version):
+        return done(VERSION_MISMATCH)
+    if contract_dev:
         return done(DEV_WARNING)
-    return done(OK if expected == result.own_hash else MISMATCH)
+    if version_omitted:
+        return done(DEV_WARNING, "version-omitted")
+    return done(OK)
 
 
 # ── Status files ─────────────────────────────────────────────────────────
@@ -204,6 +248,7 @@ def write_status(result: CheckResult, *, persistent: bool, directory: Optional[s
         "own_transport_version": result.own_transport_version,
         "expected_hash": result.expected_hash,
         "expected_transport_version": result.expected_transport_version,
+        "expected_component_version": result.expected_component_version,
         "bundle": result.bundle,
         "result": result.result,
         "reason": result.reason,
@@ -393,6 +438,6 @@ def refusal_message(summary: dict[str, Any]) -> Optional[str]:
 
 __all__ = [
     "BUNDLE_ERROR", "ContractError", "CheckResult", "DEV_WARNING", "EXIT_CODE", "MISMATCH", "OK",
-    "SKIPPED", "aggregate", "check", "exit_if_refused", "read_statuses", "refusal_message",
+    "SKIPPED", "VERSION_MISMATCH", "aggregate", "check", "exit_if_refused", "read_statuses", "refusal_message",
     "startup_check", "status_dir", "write_status", "asdict",
 ]

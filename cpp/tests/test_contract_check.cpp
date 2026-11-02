@@ -60,7 +60,9 @@ static void runVectors()
         o.ownHash = d["own_hash"];
         o.ownVersion = d["own_version"];
         o.force = c.value("force", false);
-        const rc::CheckResult r = rc::check(d["component"], d["component_version"], o);
+        o.bundleKey = c.value("bundle_key", std::string());
+        const rc::CheckResult r = rc::check(c.value("component", d["component"].get<std::string>()),
+                                            c.value("component_version", d["component_version"].get<std::string>()), o);
 
         EXPECT_EQ(std::string(rc::outcomeName(r.outcome)), c["result"].get<std::string>(), name + " result");
         EXPECT_EQ(r.reason, c["reason"].is_null() ? std::string() : c["reason"].get<std::string>(), name + " reason");
@@ -84,7 +86,7 @@ static void runStatusFile()
     o.deviceMarker = root;  // exists, so this counts as a device
     o.ownHash = "aaaa";
     o.ownVersion = "v9";
-    std::ofstream(o.bundleFile) << R"({"bundle":"b","contract_hash":"bbbb"})";
+    std::ofstream(o.bundleFile) << R"({"bundle":"b","contract_hash":"bbbb","components":{"stm32-data-reader":"v58"}})";
 
     const rc::CheckResult r = rc::startupCheck("stm32-data-reader", "v58", /*persistent=*/true, o);
     EXPECT_EQ(r.refuseStart(), true, "mismatch refuses");

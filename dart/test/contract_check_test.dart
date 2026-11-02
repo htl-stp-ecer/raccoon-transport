@@ -21,8 +21,9 @@ void main() {
         if (c['bundle'] != null) bundle.writeAsStringSync(c['bundle'] as String);
 
         final r = checkContract(
-          defaults['component'] as String,
-          defaults['component_version'] as String,
+          (c['component'] ?? defaults['component']) as String,
+          (c['component_version'] ?? defaults['component_version']) as String,
+          bundleKey: c['bundle_key'] as String?,
           ownHash: defaults['own_hash'] as String,
           ownVersion: defaults['own_version'] as String,
           bundleFile: bundle.path,
@@ -41,7 +42,8 @@ void main() {
   test('status file is written atomically with the result', () {
     final tmp = Directory.systemTemp.createTempSync('raccoon_status_');
     addTearDown(() => tmp.deleteSync(recursive: true));
-    File('${tmp.path}/bundle.json').writeAsStringSync('{"bundle":"b","contract_hash":"bbbb"}');
+    File('${tmp.path}/bundle.json')
+        .writeAsStringSync('{"bundle":"b","contract_hash":"bbbb","components":{"botui":"v73"}}');
     final r = startupCheck(
       'botui',
       'v73',

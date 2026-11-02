@@ -14,6 +14,7 @@ cases that every implementation must pass unchanged.
 | own contract hash | compiled in (`contract.json`) | none |
 | own transport version | compiled in, `dev` if unknown | none |
 | component name and version | given by the component | none |
+| bundle key | the component name | given by the component when its bundle entry is named differently (the Pi server `raccoon-server` is `raccoon-cli` in the bundle) |
 
 `RACCOON_CONTRACT_CHECK=force` runs the check even when the device marker is
 missing (used to test on a laptop).
@@ -30,9 +31,12 @@ The bundle manifest as written by the image build, copied to the device:
 }
 ```
 
-Only `bundle`, `contract_hash` and `components["raccoon-transport"]` matter here.
-`contract_hash` holds the expected hash, or the literal `dev` to switch to dev
-mode. Unknown keys are ignored.
+Only `bundle`, `contract_hash`, `components["raccoon-transport"]` and the
+component's own entry in `components` matter here. `contract_hash` holds the
+expected hash, or the literal `dev` to switch the transport comparison to dev
+mode. A component's own entry holds the release tag it was released as
+(`v173`), or the literal `dev` to omit the version comparison for that
+component. Unknown keys are ignored.
 
 ## Decision
 
@@ -43,15 +47,27 @@ mode. Unknown keys are ignored.
    `bundle-fehler`, reason `file-unreadable`.
 4. `contract_hash` is absent or not a string: `bundle-fehler`, reason `field-missing`.
 5. `contract_hash` is empty or only whitespace: `bundle-fehler`, reason `field-empty`.
-6. `contract_hash` is `dev`: `dev-warnung`. Nothing to compare against; the own
-   hash is recorded and the aggregate (see below) warns when active components
-   disagree with each other. Never blocks.
-7. `contract_hash` equals the own hash: `ok`.
-8. Otherwise: `mismatch`.
+6. `contract_hash` is neither `dev` nor the own hash: `mismatch`.
+7. The component's own entry (`components[bundle key]`) is absent or not a
+   string: `bundle-fehler`, reason `version-field-missing`.
+8. The entry is empty or only whitespace: `bundle-fehler`, reason `version-field-empty`.
+9. The entry is not `dev` and differs from the component's own version after
+   normalising (trim, drop one leading `v`/`V` on both sides): `version-mismatch`.
+10. Otherwise the check passes. The result is `dev-warnung` when `contract_hash`
+    is `dev` (nothing to compare against; the own hash is recorded and the
+    aggregate warns when active components disagree with each other), or when the
+    entry is `dev` (reason `version-omitted`: only the version comparison is
+    omitted); `ok` when neither is `dev`.
+
+The version comparison is independent of the contract: a `dev` contract does not
+excuse a wrong version, and a `dev` entry does not excuse a wrong contract. If
+several things fail, the first in the order above decides the result (file
+problems, then contract_hash, then transport `mismatch`, then the version
+entry).
 
 Comparison is exact (case-sensitive) after trimming surrounding whitespace.
 
-`mismatch` and `bundle-fehler` **refuse**: the component must not start. A
+`mismatch`, `version-mismatch` and `bundle-fehler` **refuse**: the component must not start. A
 component that refuses logs the message where it normally logs and exits with
 the reserved exit code **78**. systemd units set `RestartPreventExitStatus=78`
 so a refusal does not become a restart loop.
@@ -63,10 +79,15 @@ printed as `unknown`):
 
 - ok: `contract ok: {own_hash}`
 - mismatch: `transport contract mismatch: {component} {component_version} uses contract {own_hash} (transport {own_version}), bundle {bundle} expects {expected_hash} (transport {expected_version}); update or reflash so all components match`
-- dev-warnung: `transport contract check is in dev mode (bundle field is 'dev'): {component} uses contract {own_hash} (transport {own_version}); mismatches are not enforced`
+- version-mismatch: `component version mismatch: {component} is {component_version} but bundle {bundle} expects {expected_version}; update or reflash so all components match`
+- dev-warnung (contract): `transport contract check is in dev mode (bundle field is 'dev'): {component} uses contract {own_hash} (transport {own_version}); mismatches are not enforced`
+- dev-warnung (reason `version-omitted`, contract not dev): `component version check omitted ('{bundle_key}' is 'dev' in the bundle): {component} {component_version} is not compared; mismatches are not enforced`
 - bundle-fehler: `transport contract check failed: {reason_text}: {bundle_file}`, with reason text
   `bundle file is missing` / `bundle file is unreadable` /
-  `bundle file has no contract_hash field` / `bundle file has an empty contract_hash`
+  `bundle file has no contract_hash field` / `bundle file has an empty contract_hash`;
+  for the reasons `version-field-missing` / `version-field-empty` the message is
+  `bundle check failed: bundle file has no version for {bundle_key}: {bundle_file}` /
+  `bundle check failed: bundle file has an empty version for {bundle_key}: {bundle_file}`
 - skipped: `not running on a raccoon device; contract check skipped`
 
 ## Status file
@@ -84,6 +105,7 @@ component; it logs a warning.
   "own_transport_version": "v69",
   "expected_hash": "93ac36836810c9fe",
   "expected_transport_version": "v69",
+  "expected_component_version": "v58",
   "bundle": "2026.11.02",
   "result": "ok",
   "reason": null,
@@ -113,7 +135,7 @@ usable on a laptop for development and tests.
 
 The aggregate answers three things: the expected hash and transport version
 from the bundle file, whether dev mode is on, and the list of components with
-result and activity. A run is refused when a component with `mismatch` or
+result and activity. A run is refused when a component with `mismatch`, `version-mismatch` or
 `bundle-fehler` is active, or is `persistent` (a service that refused and
 exited stays blocking until it starts again and overwrites its file). A
 stale file of a non-persistent component (raccoon-lib from an earlier run) is

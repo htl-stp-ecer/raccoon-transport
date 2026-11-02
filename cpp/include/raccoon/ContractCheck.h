@@ -19,6 +19,7 @@ namespace raccoon::contract
         Mismatch,
         DevWarning,
         BundleError,
+        VersionMismatch,
         Skipped,
     };
 
@@ -32,6 +33,9 @@ namespace raccoon::contract
         std::string ownHash;
         std::string ownVersion;
         bool force = false;          // also RACCOON_CONTRACT_CHECK=force
+        // Name of this component in the bundle's "components" map; empty = the component name.
+        // (The Pi server is "raccoon-server" but its bundle entry is "raccoon-cli".)
+        std::string bundleKey;
     };
 
     struct CheckResult
@@ -44,17 +48,21 @@ namespace raccoon::contract
         std::string expectedTransportVersion;  // empty if unknown
         std::string bundle;                    // empty if unknown
         Outcome outcome = Outcome::Skipped;
-        std::string reason;                    // file-missing, file-unreadable, field-missing, field-empty, or empty
+        std::string reason;                    // file-missing, file-unreadable, field-missing, field-empty,
+                                               // version-field-missing, version-field-empty, version-omitted, or empty
         std::string message;
         std::string bundleFile;
+        std::string bundleKey;                 // the component's entry in the bundle
+        std::string expectedComponentVersion;  // empty if unknown
 
         [[nodiscard]] bool refuseStart() const noexcept
         {
-            return outcome == Outcome::Mismatch || outcome == Outcome::BundleError;
+            return outcome == Outcome::Mismatch || outcome == Outcome::BundleError ||
+                   outcome == Outcome::VersionMismatch;
         }
     };
 
-    // Name used in status files and logs: ok, mismatch, dev-warnung, bundle-fehler, skipped.
+    // Name used in status files and logs: ok, mismatch, dev-warnung, bundle-fehler, version-mismatch, skipped.
     const char* outcomeName(Outcome outcome) noexcept;
 
     // The decision of the spec. Reads one file, writes nothing.
