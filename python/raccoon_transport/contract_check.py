@@ -34,9 +34,13 @@ OK = "ok"
 MISMATCH = "mismatch"
 DEV_WARNING = "dev-warnung"
 BUNDLE_ERROR = "bundle-fehler"
-VERSION_MISMATCH = "version-mismatch"
 SKIPPED = "skipped"
-REFUSING = (MISMATCH, BUNDLE_ERROR, VERSION_MISMATCH)
+
+
+def is_refusing(result: Optional[str]) -> bool:
+    """Everything except ok, dev-warnung and skipped refuses, including the results that a
+    component's own check defines (for example the component version check)."""
+    return result not in (OK, DEV_WARNING, SKIPPED, None)
 
 _REASON_TEXT = {
     "file-missing": "bundle file is missing",
@@ -44,7 +48,6 @@ _REASON_TEXT = {
     "field-missing": "bundle file has no contract_hash field",
     "field-empty": "bundle file has an empty contract_hash",
 }
-_VERSION_REASONS = ("version-field-missing", "version-field-empty")
 
 
 class ContractError(RuntimeError):
@@ -53,6 +56,25 @@ class ContractError(RuntimeError):
     def __init__(self, result: "CheckResult"):
         super().__init__(result.message)
         self.result = result
+
+
+@dataclass
+class ComponentCheck:
+    """The result of a check that belongs to the component, not to the transport.
+
+    A component runs its own check (for example "is my version the one in the
+    bundle?") and hands the result to :func:`check` / :func:`startup_check`. The
+    transport knows nothing about what it checks: ``result`` is ``ok``,
+    ``dev-warnung`` or any name that refuses (``version-mismatch``, ...), and
+    ``message`` is shown as it is. It is merged after the transport's own checks
+    (a transport failure always wins) and recorded in the status file.
+    """
+
+    name: str  # e.g. "version"
+    result: str
+    message: str
+    reason: Optional[str] = None
+    expected: Optional[str] = None
 
 
 @dataclass
@@ -68,12 +90,11 @@ class CheckResult:
     reason: Optional[str]
     message: str
     bundle_file: str = DEFAULT_BUNDLE_FILE
-    bundle_key: str = ""
-    expected_component_version: Optional[str] = None
+    component_check: Optional[ComponentCheck] = None
 
     @property
     def refuse(self) -> bool:
-        return self.result in REFUSING
+        return is_refusing(self.result)
 
 
 def own_transport_version() -> str:
@@ -87,22 +108,11 @@ def _name(value: Optional[str]) -> str:
     return value if value else "unknown"
 
 
-def _normalize_version(value: Optional[str]) -> str:
-    """`v173` and `173` are the same version; nothing else is normalised."""
-    value = (value or "").strip()
-    return value[1:] if value[:1] in ("v", "V") else value
-
-
 def _message(r: CheckResult) -> str:
     if r.result == OK:
         return f"contract ok: {r.own_hash}"
     if r.result == SKIPPED:
         return "not running on a raccoon device; contract check skipped"
-    if r.result == DEV_WARNING and r.reason == "version-omitted":
-        return (
-            f"component version check omitted ('{r.bundle_key}' is 'dev' in the bundle): "
-            f"{r.component} {_name(r.component_version)} is not compared; mismatches are not enforced"
-        )
     if r.result == DEV_WARNING:
         return (
             "transport contract check is in dev mode (bundle field is 'dev'): "
@@ -116,14 +126,6 @@ def _message(r: CheckResult) -> str:
             f"{r.expected_hash} (transport {_name(r.expected_transport_version)}); "
             "update or reflash so all components match"
         )
-    if r.result == VERSION_MISMATCH:
-        return (
-            f"component version mismatch: {r.component} is {_name(r.component_version)} but bundle "
-            f"{_name(r.bundle)} expects {r.expected_component_version}; update or reflash so all components match"
-        )
-    if r.reason in _VERSION_REASONS:
-        what = "no version" if r.reason == "version-field-missing" else "an empty version"
-        return f"bundle check failed: bundle file has {what} for {r.bundle_key}: {r.bundle_file}"
     return f"transport contract check failed: {_REASON_TEXT[r.reason or 'file-unreadable']}: {r.bundle_file}"
 
 
@@ -131,7 +133,7 @@ def check(
     component: str,
     component_version: str,
     *,
-    bundle_key: Optional[str] = None,
+    component_check: Optional[ComponentCheck] = None,
     own_hash: Optional[str] = None,
     own_version: Optional[str] = None,
     bundle_file: Optional[str] = None,
@@ -155,13 +157,19 @@ def check(
         reason=None,
         message="",
         bundle_file=bundle_file,
-        bundle_key=bundle_key or component,
+        component_check=component_check,
     )
 
     def done(outcome: str, reason: Optional[str] = None) -> CheckResult:
         result.result = outcome
         result.reason = reason
         result.message = _message(result)
+        return result
+
+    def done_by_component(own: ComponentCheck) -> CheckResult:
+        result.result = own.result
+        result.reason = own.reason
+        result.message = own.message
         return result
 
     if not force and not Path(device_marker).is_dir():
@@ -197,23 +205,15 @@ def check(
     if not contract_dev and expected != result.own_hash:
         return done(MISMATCH)
 
-    # The component's own version against the bundle's entry for it. Independent of
-    # the contract: a dev contract does not excuse a wrong version, and 'dev' in the
-    # component's own field omits only this comparison.
-    entry = components.get(result.bundle_key) if isinstance(components, dict) else None
-    if not isinstance(entry, str):
-        return done(BUNDLE_ERROR, "version-field-missing")
-    entry = entry.strip()
-    if not entry:
-        return done(BUNDLE_ERROR, "version-field-empty")
-    result.expected_component_version = entry
-    version_omitted = entry == "dev"
-    if not version_omitted and _normalize_version(entry) != _normalize_version(component_version):
-        return done(VERSION_MISMATCH)
+    # The transport's own checks passed. Now the component's own check, if it has one:
+    # a refusing result of it refuses; otherwise a dev contract, then a dev result of
+    # the component, then ok. (The transport knows nothing about what it checks.)
+    if component_check is not None and component_check.result not in (OK, DEV_WARNING):
+        return done_by_component(component_check)
     if contract_dev:
         return done(DEV_WARNING)
-    if version_omitted:
-        return done(DEV_WARNING, "version-omitted")
+    if component_check is not None and component_check.result == DEV_WARNING:
+        return done_by_component(component_check)
     return done(OK)
 
 
@@ -248,7 +248,7 @@ def write_status(result: CheckResult, *, persistent: bool, directory: Optional[s
         "own_transport_version": result.own_transport_version,
         "expected_hash": result.expected_hash,
         "expected_transport_version": result.expected_transport_version,
-        "expected_component_version": result.expected_component_version,
+        "component_check": asdict(result.component_check) if result.component_check else None,
         "bundle": result.bundle,
         "result": result.result,
         "reason": result.reason,
@@ -407,7 +407,7 @@ def aggregate(
     blocking = [
         s["component"]
         for s in statuses
-        if s.get("result") in REFUSING and (s.get("active") or s.get("persistent"))
+        if is_refusing(s.get("result")) and (s.get("active") or s.get("persistent"))
     ]
     if bundle["error"] is not None:
         blocking.insert(0, "bundle")
@@ -416,7 +416,7 @@ def aggregate(
     dev_components = [
         s["component"]
         for s in statuses
-        if s.get("expected_component_version") == "dev" and (s.get("active") or s.get("persistent"))
+        if (s.get("component_check") or {}).get("result") == DEV_WARNING and (s.get("active") or s.get("persistent"))
     ]
     return {
         "on_device": True,
@@ -446,6 +446,6 @@ def refusal_message(summary: dict[str, Any]) -> Optional[str]:
 
 __all__ = [
     "BUNDLE_ERROR", "ContractError", "CheckResult", "DEV_WARNING", "EXIT_CODE", "MISMATCH", "OK",
-    "SKIPPED", "VERSION_MISMATCH", "aggregate", "check", "exit_if_refused", "read_statuses", "refusal_message",
+    "SKIPPED", "ComponentCheck", "is_refusing", "aggregate", "check", "exit_if_refused", "read_statuses", "refusal_message",
     "startup_check", "status_dir", "write_status", "asdict",
 ]

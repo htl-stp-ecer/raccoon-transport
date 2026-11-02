@@ -5,8 +5,7 @@
     "component_version": "v58",
     "own_hash": "93ac36836810c9fe",
     "own_version": "v69",
-    "bundle_file": "/etc/raccoon-bundle.json",
-    "about_overrides": "A case may override component, component_version and bundle_key (bundle_key defaults to component)."
+    "bundle_file": "/etc/raccoon-bundle.json"
   },
   "cases": [
     {
@@ -181,9 +180,16 @@
       "message": "transport contract mismatch: stm32-data-reader v58 uses contract 93ac36836810c9fe (transport v69), bundle unknown expects 1111111111111111 (transport unknown); update or reflash so all components match"
     },
     {
-      "name": "version without v matches v58",
+      "name": "component check ok changes nothing",
       "on_device": true,
-      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"stm32-data-reader\":\"58\"}}",
+      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"93ac36836810c9fe\"}",
+      "component_check": {
+        "name": "version",
+        "result": "ok",
+        "reason": null,
+        "message": "unused",
+        "expected": null
+      },
       "result": "ok",
       "reason": null,
       "refuse": false,
@@ -191,39 +197,33 @@
       "message": "contract ok: 93ac36836810c9fe"
     },
     {
-      "name": "version with surrounding whitespace",
+      "name": "component check refuses",
       "on_device": true,
-      "bundle": "{\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"stm32-data-reader\":\" v58 \"}}",
-      "result": "ok",
-      "reason": null,
-      "refuse": false,
-      "expected_hash": "93ac36836810c9fe",
-      "message": "contract ok: 93ac36836810c9fe"
-    },
-    {
-      "name": "version mismatch",
-      "on_device": true,
-      "bundle": "{\"bundle\":\"2026.11.02\",\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"stm32-data-reader\":\"v59\"}}",
+      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"93ac36836810c9fe\"}",
+      "component_check": {
+        "name": "version",
+        "result": "version-mismatch",
+        "reason": null,
+        "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match",
+        "expected": "v59"
+      },
       "result": "version-mismatch",
       "reason": null,
       "refuse": true,
       "expected_hash": "93ac36836810c9fe",
-      "message": "component version mismatch: stm32-data-reader is v58 but bundle 2026.11.02 expects v59; update or reflash so all components match"
+      "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match"
     },
     {
-      "name": "version mismatch with unknown bundle name",
+      "name": "component check refuses with a reason",
       "on_device": true,
-      "bundle": "{\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"stm32-data-reader\":\"v59\"}}",
-      "result": "version-mismatch",
-      "reason": null,
-      "refuse": true,
-      "expected_hash": "93ac36836810c9fe",
-      "message": "component version mismatch: stm32-data-reader is v58 but bundle unknown expects v59; update or reflash so all components match"
-    },
-    {
-      "name": "version entry missing",
-      "on_device": true,
-      "bundle": "{\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"raccoon-cli\":\"v173\"}}",
+      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"93ac36836810c9fe\"}",
+      "component_check": {
+        "name": "version",
+        "result": "bundle-fehler",
+        "reason": "version-field-missing",
+        "message": "bundle check failed: bundle file has no version for stm32-data-reader: /etc/raccoon-bundle.json",
+        "expected": null
+      },
       "result": "bundle-fehler",
       "reason": "version-field-missing",
       "refuse": true,
@@ -231,39 +231,16 @@
       "message": "bundle check failed: bundle file has no version for stm32-data-reader: /etc/raccoon-bundle.json"
     },
     {
-      "name": "components missing entirely",
+      "name": "component check dev warns with its own message",
       "on_device": true,
-      "bundle": "{\"contract_hash\":\"93ac36836810c9fe\"}",
-      "result": "bundle-fehler",
-      "reason": "version-field-missing",
-      "refuse": true,
-      "expected_hash": "93ac36836810c9fe",
-      "message": "bundle check failed: bundle file has no version for stm32-data-reader: /etc/raccoon-bundle.json"
-    },
-    {
-      "name": "version entry not a string",
-      "on_device": true,
-      "bundle": "{\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"stm32-data-reader\":58}}",
-      "result": "bundle-fehler",
-      "reason": "version-field-missing",
-      "refuse": true,
-      "expected_hash": "93ac36836810c9fe",
-      "message": "bundle check failed: bundle file has no version for stm32-data-reader: /etc/raccoon-bundle.json"
-    },
-    {
-      "name": "version entry empty",
-      "on_device": true,
-      "bundle": "{\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"stm32-data-reader\":\"\"}}",
-      "result": "bundle-fehler",
-      "reason": "version-field-empty",
-      "refuse": true,
-      "expected_hash": "93ac36836810c9fe",
-      "message": "bundle check failed: bundle file has an empty version for stm32-data-reader: /etc/raccoon-bundle.json"
-    },
-    {
-      "name": "version entry dev omits only the version check",
-      "on_device": true,
-      "bundle": "{\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"stm32-data-reader\":\"dev\"}}",
+      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"93ac36836810c9fe\"}",
+      "component_check": {
+        "name": "version",
+        "result": "dev-warnung",
+        "reason": "version-omitted",
+        "message": "component version check omitted ('stm32-data-reader' is 'dev' in the bundle): stm32-data-reader v58 is not compared; mismatches are not enforced",
+        "expected": "dev"
+      },
       "result": "dev-warnung",
       "reason": "version-omitted",
       "refuse": false,
@@ -271,39 +248,16 @@
       "message": "component version check omitted ('stm32-data-reader' is 'dev' in the bundle): stm32-data-reader v58 is not compared; mismatches are not enforced"
     },
     {
-      "name": "version dev does not excuse a contract mismatch",
+      "name": "dev contract: the transport message wins over a dev component check",
       "on_device": true,
-      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"1111111111111111\",\"components\":{\"stm32-data-reader\":\"dev\",\"raccoon-transport\":\"v70\"}}",
-      "result": "mismatch",
-      "reason": null,
-      "refuse": true,
-      "expected_hash": "1111111111111111",
-      "message": "transport contract mismatch: stm32-data-reader v58 uses contract 93ac36836810c9fe (transport v69), bundle b expects 1111111111111111 (transport v70); update or reflash so all components match"
-    },
-    {
-      "name": "contract mismatch wins over a version mismatch",
-      "on_device": true,
-      "bundle": "{\"contract_hash\":\"1111111111111111\",\"components\":{\"stm32-data-reader\":\"v59\"}}",
-      "result": "mismatch",
-      "reason": null,
-      "refuse": true,
-      "expected_hash": "1111111111111111",
-      "message": "transport contract mismatch: stm32-data-reader v58 uses contract 93ac36836810c9fe (transport v69), bundle unknown expects 1111111111111111 (transport unknown); update or reflash so all components match"
-    },
-    {
-      "name": "dev contract does not excuse a version mismatch",
-      "on_device": true,
-      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"dev\",\"components\":{\"stm32-data-reader\":\"v59\"}}",
-      "result": "version-mismatch",
-      "reason": null,
-      "refuse": true,
-      "expected_hash": "dev",
-      "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match"
-    },
-    {
-      "name": "both dev: the transport message wins",
-      "on_device": true,
-      "bundle": "{\"contract_hash\":\"dev\",\"components\":{\"stm32-data-reader\":\"dev\"}}",
+      "bundle": "{\"contract_hash\":\"dev\"}",
+      "component_check": {
+        "name": "version",
+        "result": "dev-warnung",
+        "reason": "version-omitted",
+        "message": "component version check omitted ('stm32-data-reader' is 'dev' in the bundle): stm32-data-reader v58 is not compared; mismatches are not enforced",
+        "expected": "dev"
+      },
       "result": "dev-warnung",
       "reason": null,
       "refuse": false,
@@ -311,30 +265,89 @@
       "message": "transport contract check is in dev mode (bundle field is 'dev'): stm32-data-reader uses contract 93ac36836810c9fe (transport v69); mismatches are not enforced"
     },
     {
-      "name": "another bundle key: the Pi server is raccoon-cli in the bundle",
+      "name": "dev contract does not excuse a refusing component check",
       "on_device": true,
-      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"raccoon-cli\":\"v173\"}}",
-      "result": "ok",
-      "reason": null,
-      "refuse": false,
-      "expected_hash": "93ac36836810c9fe",
-      "message": "contract ok: 93ac36836810c9fe",
-      "component": "raccoon-server",
-      "component_version": "173",
-      "bundle_key": "raccoon-cli"
-    },
-    {
-      "name": "another bundle key: mismatch",
-      "on_device": true,
-      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"raccoon-cli\":\"v174\"}}",
+      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"dev\"}",
+      "component_check": {
+        "name": "version",
+        "result": "version-mismatch",
+        "reason": null,
+        "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match",
+        "expected": "v59"
+      },
       "result": "version-mismatch",
       "reason": null,
       "refuse": true,
-      "expected_hash": "93ac36836810c9fe",
-      "message": "component version mismatch: raccoon-server is 173 but bundle b expects v174; update or reflash so all components match",
-      "component": "raccoon-server",
-      "component_version": "173",
-      "bundle_key": "raccoon-cli"
+      "expected_hash": "dev",
+      "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match"
+    },
+    {
+      "name": "contract mismatch wins over a refusing component check",
+      "on_device": true,
+      "bundle": "{\"contract_hash\":\"1111111111111111\"}",
+      "component_check": {
+        "name": "version",
+        "result": "version-mismatch",
+        "reason": null,
+        "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match",
+        "expected": "v59"
+      },
+      "result": "mismatch",
+      "reason": null,
+      "refuse": true,
+      "expected_hash": "1111111111111111",
+      "message": "transport contract mismatch: stm32-data-reader v58 uses contract 93ac36836810c9fe (transport v69), bundle unknown expects 1111111111111111 (transport unknown); update or reflash so all components match"
+    },
+    {
+      "name": "a broken contract_hash wins over a refusing component check",
+      "on_device": true,
+      "bundle": "{\"components\":{}}",
+      "component_check": {
+        "name": "version",
+        "result": "version-mismatch",
+        "reason": null,
+        "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match",
+        "expected": "v59"
+      },
+      "result": "bundle-fehler",
+      "reason": "field-missing",
+      "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file has no contract_hash field: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "missing bundle file wins over a refusing component check",
+      "on_device": true,
+      "bundle": null,
+      "component_check": {
+        "name": "version",
+        "result": "version-mismatch",
+        "reason": null,
+        "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match",
+        "expected": "v59"
+      },
+      "result": "bundle-fehler",
+      "reason": "file-missing",
+      "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file is missing: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "off a device the component check is ignored",
+      "on_device": false,
+      "bundle": "{\"bundle\":\"b\",\"contract_hash\":\"93ac36836810c9fe\"}",
+      "component_check": {
+        "name": "version",
+        "result": "version-mismatch",
+        "reason": null,
+        "message": "component version mismatch: stm32-data-reader is v58 but bundle b expects v59; update or reflash so all components match",
+        "expected": "v59"
+      },
+      "result": "skipped",
+      "reason": null,
+      "refuse": false,
+      "expected_hash": null,
+      "message": "not running on a raccoon device; contract check skipped"
     }
   ]
 }

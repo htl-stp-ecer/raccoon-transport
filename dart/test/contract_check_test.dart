@@ -20,10 +20,19 @@ void main() {
         final bundle = File('${tmp.path}/bundle.json');
         if (c['bundle'] != null) bundle.writeAsStringSync(c['bundle'] as String);
 
+        final own = c['component_check'] as Map<String, dynamic>?;
         final r = checkContract(
-          (c['component'] ?? defaults['component']) as String,
-          (c['component_version'] ?? defaults['component_version']) as String,
-          bundleKey: c['bundle_key'] as String?,
+          defaults['component'] as String,
+          defaults['component_version'] as String,
+          componentCheck: own == null
+              ? null
+              : ComponentCheck(
+                  name: own['name'] as String,
+                  result: own['result'] as String,
+                  message: own['message'] as String,
+                  reason: own['reason'] as String?,
+                  expected: own['expected'] as String?,
+                ),
           ownHash: defaults['own_hash'] as String,
           ownVersion: defaults['own_version'] as String,
           bundleFile: bundle.path,
@@ -43,7 +52,7 @@ void main() {
     final tmp = Directory.systemTemp.createTempSync('raccoon_status_');
     addTearDown(() => tmp.deleteSync(recursive: true));
     File('${tmp.path}/bundle.json')
-        .writeAsStringSync('{"bundle":"b","contract_hash":"bbbb","components":{"botui":"v73"}}');
+        .writeAsStringSync('{"bundle":"b","contract_hash":"bbbb"}');
     final r = startupCheck(
       'botui',
       'v73',

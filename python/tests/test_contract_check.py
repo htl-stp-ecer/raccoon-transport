@@ -29,10 +29,13 @@ class VectorTests(unittest.TestCase):
                 if case["bundle"] is not None:
                     bundle.parent.mkdir()
                     bundle.write_text(case["bundle"])
+                own = case.get("component_check")
                 result = cc.check(
-                    case.get("component", defaults["component"]),
-                    case.get("component_version", defaults["component_version"]),
-                    bundle_key=case.get("bundle_key"),
+                    defaults["component"],
+                    defaults["component_version"],
+                    component_check=cc.ComponentCheck(
+                        name=own["name"], result=own["result"], message=own["message"],
+                        reason=own["reason"], expected=own["expected"]) if own else None,
                     own_hash=defaults["own_hash"],
                     own_version=defaults["own_version"],
                     bundle_file=str(bundle),
@@ -118,9 +121,9 @@ class AggregateTests(unittest.TestCase):
         self.bundle = self.dir / "bundle.json"
         self.run_dir = self.dir / "run"
 
-    def status(self, component, own, persistent, pid=None, starttime="same"):
+    def status(self, component, own, persistent, pid=None, starttime="same", component_check=None):
         self.bundle.write_text(self.bundle_text)
-        result = cc.check(component, "v1", own_hash=own, own_version="v9",
+        result = cc.check(component, "v1", own_hash=own, own_version="v9", component_check=component_check,
                           bundle_file=str(self.bundle), device_marker=str(self.dir / "image"))
         path = cc.write_status(result, persistent=persistent, directory=str(self.run_dir))
         if pid is not None:
@@ -188,20 +191,27 @@ class AggregateTests(unittest.TestCase):
         self.assertTrue(summary["hashes_differ"])
         self.assertTrue(summary["ok"])  # dev mode never blocks
 
-    def test_components_with_a_dev_entry_are_listed(self):
-        self.bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa",
-                                       "components": {**json.loads(VERSIONS), "a": "dev"}})
-        self.status("a", "aaaa", True)
+    def test_components_with_a_dev_component_check_are_listed(self):
+        dev = cc.ComponentCheck(name="version", result="dev-warnung", message="omitted", reason="version-omitted")
+        self.status("a", "aaaa", True, component_check=dev)
         self.status("b", "aaaa", True)
         summary = self.agg()
         self.assertEqual(["a"], summary["dev_components"])
         self.assertFalse(summary["dev_mode"])  # the contract itself is not in dev mode
         self.assertTrue(summary["ok"])
 
+    def test_a_refusing_component_check_blocks_runs_and_is_named(self):
+        bad = cc.ComponentCheck(name="version", result="version-mismatch", message="component version mismatch: a ...")
+        self.status("a", "aaaa", True, component_check=bad)
+        summary = self.agg()
+        self.assertFalse(summary["ok"])
+        self.assertEqual(["a"], summary["blocking"])
+        self.assertIn("component version mismatch", cc.refusal_message(summary))
+        self.assertEqual("version", summary["components"][0]["component_check"]["name"])
+
     def test_dead_run_component_with_dev_entry_is_not_listed(self):
-        self.bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa",
-                                       "components": {**json.loads(VERSIONS), "raccoon-lib": "dev"}})
-        self.status("raccoon-lib", "aaaa", False, pid=2**22 + 12345)
+        dev = cc.ComponentCheck(name="version", result="dev-warnung", message="omitted")
+        self.status("raccoon-lib", "aaaa", False, pid=2**22 + 12345, component_check=dev)
         self.assertEqual([], self.agg()["dev_components"])
 
     def test_bundle_error_blocks(self):

@@ -5,6 +5,7 @@
 // status file (not over the transport) and, when refuseStart() is true, the
 // component must exit with kExitCode.
 
+#include <optional>
 #include <string>
 
 namespace raccoon::contract
@@ -19,8 +20,23 @@ namespace raccoon::contract
         Mismatch,
         DevWarning,
         BundleError,
-        VersionMismatch,
+        ComponentRefused,  // the component's own check refused (its name is in CheckResult::result)
         Skipped,
+    };
+
+    // The result of a check that belongs to the component, not to the transport (for
+    // example "is my version the one in the bundle?"). The component runs it and hands
+    // it to check()/startupCheck(). `result` is "ok", "dev-warnung" or any name that
+    // refuses (e.g. "version-mismatch"); `message` is shown as it is. It is merged after
+    // the transport's own checks (a transport failure always wins) and recorded in the
+    // status file. The transport knows nothing about what it checks.
+    struct ComponentCheck
+    {
+        std::string name;    // e.g. "version"
+        std::string result;
+        std::string message;
+        std::string reason;  // may be empty
+        std::string expected;  // may be empty
     };
 
     struct CheckOptions
@@ -33,9 +49,8 @@ namespace raccoon::contract
         std::string ownHash;
         std::string ownVersion;
         bool force = false;          // also RACCOON_CONTRACT_CHECK=force
-        // Name of this component in the bundle's "components" map; empty = the component name.
-        // (The Pi server is "raccoon-server" but its bundle entry is "raccoon-cli".)
-        std::string bundleKey;
+        // The component's own check, if it has one (see ComponentCheck).
+        std::optional<ComponentCheck> componentCheck;
     };
 
     struct CheckResult
@@ -48,21 +63,21 @@ namespace raccoon::contract
         std::string expectedTransportVersion;  // empty if unknown
         std::string bundle;                    // empty if unknown
         Outcome outcome = Outcome::Skipped;
-        std::string reason;                    // file-missing, file-unreadable, field-missing, field-empty,
-                                               // version-field-missing, version-field-empty, version-omitted, or empty
+        std::string reason;                    // file-missing, file-unreadable, field-missing, field-empty, or
+                                               // the reason of the component's check, or empty
+        std::string result;                    // the name used in status files: ok, mismatch, ...
         std::string message;
         std::string bundleFile;
-        std::string bundleKey;                 // the component's entry in the bundle
-        std::string expectedComponentVersion;  // empty if unknown
+        std::optional<ComponentCheck> componentCheck;
 
         [[nodiscard]] bool refuseStart() const noexcept
         {
             return outcome == Outcome::Mismatch || outcome == Outcome::BundleError ||
-                   outcome == Outcome::VersionMismatch;
+                   outcome == Outcome::ComponentRefused;
         }
     };
 
-    // Name used in status files and logs: ok, mismatch, dev-warnung, bundle-fehler, version-mismatch, skipped.
+    // Name of the transport's own outcomes: ok, mismatch, dev-warnung, bundle-fehler, skipped.
     const char* outcomeName(Outcome outcome) noexcept;
 
     // The decision of the spec. Reads one file, writes nothing.

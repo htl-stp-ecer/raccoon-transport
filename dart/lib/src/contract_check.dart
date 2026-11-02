@@ -27,7 +27,6 @@ const String contractOk = 'ok';
 const String contractMismatch = 'mismatch';
 const String contractDevWarning = 'dev-warnung';
 const String contractBundleError = 'bundle-fehler';
-const String contractVersionMismatch = 'version-mismatch';
 const String contractSkipped = 'skipped';
 
 const Map<String, String> _reasonText = {
@@ -37,6 +36,41 @@ const Map<String, String> _reasonText = {
   'field-empty': 'bundle file has an empty contract_hash',
 };
 
+/// The result of a check that belongs to the component, not to the transport (for
+/// example "is my version the one in the bundle?"). The component runs it and hands it
+/// to [checkContract] / [startupCheck]. [result] is `ok`, `dev-warnung` or any name that
+/// refuses (e.g. `version-mismatch`); [message] is shown as it is. It is merged after the
+/// transport's own checks (a transport failure always wins) and recorded in the status
+/// file. The transport knows nothing about what it checks.
+class ComponentCheck {
+  const ComponentCheck({
+    required this.name,
+    required this.result,
+    required this.message,
+    this.reason,
+    this.expected,
+  });
+
+  final String name;
+  final String result;
+  final String message;
+  final String? reason;
+  final String? expected;
+
+  Map<String, Object?> toJson() => {
+        'name': name,
+        'result': result,
+        'reason': reason,
+        'message': message,
+        'expected': expected,
+      };
+}
+
+/// Everything except ok, dev-warnung and skipped refuses, including the results that a
+/// component's own check defines.
+bool isRefusingResult(String result) =>
+    result != contractOk && result != contractDevWarning && result != contractSkipped;
+
 class ContractCheckResult {
   ContractCheckResult({
     required this.component,
@@ -44,8 +78,8 @@ class ContractCheckResult {
     required this.ownHash,
     required this.ownTransportVersion,
     required this.bundleFile,
-    String? bundleKey,
-  }) : bundleKey = bundleKey ?? component;
+    this.componentCheck,
+  });
 
   final String component;
   final String componentVersion;
@@ -53,9 +87,8 @@ class ContractCheckResult {
   final String ownTransportVersion;
   final String bundleFile;
 
-  /// This component's entry in the bundle's "components" map.
-  final String bundleKey;
-  String? expectedComponentVersion;
+  /// The component's own check, if it has one (see [ComponentCheck]).
+  final ComponentCheck? componentCheck;
   String? expectedHash;
   String? expectedTransportVersion;
   String? bundle;
@@ -64,18 +97,11 @@ class ContractCheckResult {
   String message = '';
 
   /// The component must not start.
-  bool get refuse =>
-      result == contractMismatch || result == contractBundleError || result == contractVersionMismatch;
+  bool get refuse => isRefusingResult(result);
   bool get devMode => result == contractDevWarning;
 }
 
 String _name(String? value) => (value == null || value.isEmpty) ? 'unknown' : value;
-
-/// `v173` and `173` are the same version; nothing else is normalised.
-String _normalizeVersion(String? value) {
-  final t = (value ?? '').trim();
-  return (t.isNotEmpty && (t[0] == 'v' || t[0] == 'V')) ? t.substring(1) : t;
-}
 
 String _message(ContractCheckResult r) {
   switch (r.result) {
@@ -83,15 +109,7 @@ String _message(ContractCheckResult r) {
       return 'contract ok: ${r.ownHash}';
     case contractSkipped:
       return 'not running on a raccoon device; contract check skipped';
-    case contractVersionMismatch:
-      return 'component version mismatch: ${r.component} is ${_name(r.componentVersion)} but bundle '
-          '${_name(r.bundle)} expects ${r.expectedComponentVersion}; '
-          'update or reflash so all components match';
     case contractDevWarning:
-      if (r.reason == 'version-omitted') {
-        return "component version check omitted ('${r.bundleKey}' is 'dev' in the bundle): "
-            '${r.component} ${_name(r.componentVersion)} is not compared; mismatches are not enforced';
-      }
       return "transport contract check is in dev mode (bundle field is 'dev'): "
           '${r.component} uses contract ${r.ownHash} (transport ${_name(r.ownTransportVersion)}); '
           'mismatches are not enforced';
@@ -100,10 +118,6 @@ String _message(ContractCheckResult r) {
           '${r.ownHash} (transport ${_name(r.ownTransportVersion)}), bundle ${_name(r.bundle)} expects '
           '${r.expectedHash} (transport ${_name(r.expectedTransportVersion)}); '
           'update or reflash so all components match';
-  }
-  if (r.reason == 'version-field-missing' || r.reason == 'version-field-empty') {
-    final what = r.reason == 'version-field-missing' ? 'no version' : 'an empty version';
-    return 'bundle check failed: bundle file has $what for ${r.bundleKey}: ${r.bundleFile}';
   }
   return 'transport contract check failed: '
       '${_reasonText[r.reason ?? 'file-unreadable']}: ${r.bundleFile}';
@@ -126,7 +140,7 @@ ContractCheckResult checkContract(
   String? deviceMarker,
   bool? force,
   String transportVersion = 'dev',
-  String? bundleKey,
+  ComponentCheck? componentCheck,
 }) {
   final bundlePath = _pick(bundleFile, 'RACCOON_BUNDLE_FILE', _defaultBundleFile);
   final markerPath = _pick(deviceMarker, 'RACCOON_DEVICE_MARKER', _defaultDeviceMarker);
@@ -137,13 +151,20 @@ ContractCheckResult checkContract(
     ownHash: ownHash ?? _ownHashFromMarker(),
     ownTransportVersion: ownVersion ?? transportVersion,
     bundleFile: bundlePath,
-    bundleKey: bundleKey,
+    componentCheck: componentCheck,
   );
 
   ContractCheckResult done(String outcome, [String? reason]) {
     r.result = outcome;
     r.reason = reason;
     r.message = _message(r);
+    return r;
+  }
+
+  ContractCheckResult doneByComponent(ComponentCheck own) {
+    r.result = own.result;
+    r.reason = own.reason;
+    r.message = own.message;
     return r;
   }
 
@@ -186,20 +207,15 @@ ContractCheckResult checkContract(
   final contractDev = trimmed == 'dev';
   if (!contractDev && trimmed != r.ownHash) return done(contractMismatch);
 
-  // The component's own version against the bundle's entry for it. Independent of the
-  // contract: a dev contract does not excuse a wrong version, and 'dev' in the
-  // component's own field omits only this comparison.
-  final entry = components is Map<String, dynamic> ? components[r.bundleKey] : null;
-  if (entry is! String) return done(contractBundleError, 'version-field-missing');
-  final expectedVersion = entry.trim();
-  if (expectedVersion.isEmpty) return done(contractBundleError, 'version-field-empty');
-  r.expectedComponentVersion = expectedVersion;
-  final versionOmitted = expectedVersion == 'dev';
-  if (!versionOmitted && _normalizeVersion(expectedVersion) != _normalizeVersion(componentVersion)) {
-    return done(contractVersionMismatch);
+  // The transport's own checks passed. Now the component's own check, if it has one: a
+  // refusing result of it refuses; otherwise a dev contract, then a dev result of the
+  // component, then ok. (The transport knows nothing about what it checks.)
+  final own = componentCheck;
+  if (own != null && own.result != contractOk && own.result != contractDevWarning) {
+    return doneByComponent(own);
   }
   if (contractDev) return done(contractDevWarning);
-  if (versionOmitted) return done(contractDevWarning, 'version-omitted');
+  if (own != null && own.result == contractDevWarning) return doneByComponent(own);
   return done(contractOk);
 }
 
@@ -224,7 +240,7 @@ bool writeContractStatus(ContractCheckResult r, {required bool persistent, Strin
     'own_transport_version': r.ownTransportVersion,
     'expected_hash': r.expectedHash,
     'expected_transport_version': r.expectedTransportVersion,
-    'expected_component_version': r.expectedComponentVersion,
+    'component_check': r.componentCheck?.toJson(),
     'bundle': r.bundle,
     'result': r.result,
     'reason': r.reason,
@@ -258,7 +274,7 @@ ContractCheckResult startupCheck(
   String? deviceMarker,
   bool? force,
   String transportVersion = 'dev',
-  String? bundleKey,
+  ComponentCheck? componentCheck,
 }) {
   final r = checkContract(
     component,
@@ -269,7 +285,7 @@ ContractCheckResult startupCheck(
     deviceMarker: deviceMarker,
     force: force,
     transportVersion: transportVersion,
-    bundleKey: bundleKey,
+    componentCheck: componentCheck,
   );
   if (r.result != contractSkipped) writeContractStatus(r, persistent: persistent, statusDir: statusDir);
   final level = r.refuse ? 'error' : (r.devMode ? 'warning' : 'info');

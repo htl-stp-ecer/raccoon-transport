@@ -60,11 +60,20 @@ static void runVectors()
         o.ownHash = d["own_hash"];
         o.ownVersion = d["own_version"];
         o.force = c.value("force", false);
-        o.bundleKey = c.value("bundle_key", std::string());
-        const rc::CheckResult r = rc::check(c.value("component", d["component"].get<std::string>()),
-                                            c.value("component_version", d["component_version"].get<std::string>()), o);
+        if (c.contains("component_check") && c["component_check"].is_object())
+        {
+            const auto& own = c["component_check"];
+            rc::ComponentCheck cc;
+            cc.name = own["name"];
+            cc.result = own["result"];
+            cc.message = own["message"];
+            cc.reason = own["reason"].is_null() ? std::string() : own["reason"].get<std::string>();
+            cc.expected = own["expected"].is_null() ? std::string() : own["expected"].get<std::string>();
+            o.componentCheck = cc;
+        }
+        const rc::CheckResult r = rc::check(d["component"], d["component_version"], o);
 
-        EXPECT_EQ(std::string(rc::outcomeName(r.outcome)), c["result"].get<std::string>(), name + " result");
+        EXPECT_EQ(r.result, c["result"].get<std::string>(), name + " result");
         EXPECT_EQ(r.reason, c["reason"].is_null() ? std::string() : c["reason"].get<std::string>(), name + " reason");
         EXPECT_EQ(r.refuseStart(), c["refuse"].get<bool>(), name + " refuse");
         EXPECT_EQ(r.expectedHash, c["expected_hash"].is_null() ? std::string() : c["expected_hash"].get<std::string>(),
@@ -86,7 +95,7 @@ static void runStatusFile()
     o.deviceMarker = root;  // exists, so this counts as a device
     o.ownHash = "aaaa";
     o.ownVersion = "v9";
-    std::ofstream(o.bundleFile) << R"({"bundle":"b","contract_hash":"bbbb","components":{"stm32-data-reader":"v58"}})";
+    std::ofstream(o.bundleFile) << R"({"bundle":"b","contract_hash":"bbbb"})";
 
     const rc::CheckResult r = rc::startupCheck("stm32-data-reader", "v58", /*persistent=*/true, o);
     EXPECT_EQ(r.refuseStart(), true, "mismatch refuses");

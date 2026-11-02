@@ -56,13 +56,6 @@ namespace raccoon::contract
             return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
         }
 
-        // `v173` and `173` are the same version; nothing else is normalised.
-        std::string normalizeVersion(const std::string& value)
-        {
-            const std::string t = trim(value);
-            return (!t.empty() && (t[0] == 'v' || t[0] == 'V')) ? t.substr(1) : t;
-        }
-
         const char* reasonText(const std::string& reason)
         {
             if (reason == "file-missing") return "bundle file is missing";
@@ -79,17 +72,9 @@ namespace raccoon::contract
                 return "contract ok: " + r.ownHash;
             case Outcome::Skipped:
                 return "not running on a raccoon device; contract check skipped";
-            case Outcome::VersionMismatch:
-                return "component version mismatch: " + r.component + " is " + orUnknown(r.componentVersion) +
-                       " but bundle " + orUnknown(r.bundle) + " expects " + r.expectedComponentVersion +
-                       "; update or reflash so all components match";
+            case Outcome::ComponentRefused:
+                return r.message;  // set from the component's check
             case Outcome::DevWarning:
-                if (r.reason == "version-omitted")
-                {
-                    return "component version check omitted ('" + r.bundleKey + "' is 'dev' in the bundle): " +
-                           r.component + " " + orUnknown(r.componentVersion) +
-                           " is not compared; mismatches are not enforced";
-                }
                 return "transport contract check is in dev mode (bundle field is 'dev'): " + r.component +
                        " uses contract " + r.ownHash + " (transport " + orUnknown(r.ownTransportVersion) +
                        "); mismatches are not enforced";
@@ -101,12 +86,6 @@ namespace raccoon::contract
             case Outcome::BundleError:
                 break;
             }
-            if (r.reason == "version-field-missing" || r.reason == "version-field-empty")
-            {
-                return std::string("bundle check failed: bundle file has ") +
-                       (r.reason == "version-field-missing" ? "no version" : "an empty version") + " for " +
-                       r.bundleKey + ": " + r.bundleFile;
-            }
             return std::string("transport contract check failed: ") + reasonText(r.reason) + ": " + r.bundleFile;
         }
 
@@ -114,7 +93,18 @@ namespace raccoon::contract
         {
             r.outcome = outcome;
             r.reason = std::move(reason);
+            r.result = outcomeName(outcome);
             r.message = makeMessage(r);
+            return r;
+        }
+
+        // The result is the component's own: its name, reason and message are used as given.
+        CheckResult finishByComponent(CheckResult r, const ComponentCheck& own, Outcome outcome)
+        {
+            r.outcome = outcome;
+            r.reason = own.reason;
+            r.result = own.result;
+            r.message = own.message;
             return r;
         }
 
@@ -159,7 +149,7 @@ namespace raccoon::contract
         case Outcome::Mismatch: return "mismatch";
         case Outcome::DevWarning: return "dev-warnung";
         case Outcome::BundleError: return "bundle-fehler";
-        case Outcome::VersionMismatch: return "version-mismatch";
+        case Outcome::ComponentRefused: return "component-refused";
         case Outcome::Skipped: return "skipped";
         }
         return "bundle-fehler";
@@ -173,7 +163,7 @@ namespace raccoon::contract
         r.ownHash = options.ownHash.empty() ? kHash : options.ownHash;
         r.ownTransportVersion = options.ownVersion.empty() ? version() : options.ownVersion;
         r.bundleFile = pick(options.bundleFile, "RACCOON_BUNDLE_FILE", kDefaultBundleFile);
-        r.bundleKey = options.bundleKey.empty() ? component : options.bundleKey;
+        r.componentCheck = options.componentCheck;
         const std::string marker = pick(options.deviceMarker, "RACCOON_DEVICE_MARKER", kDefaultDeviceMarker);
 
         const char* forceEnv = std::getenv("RACCOON_CONTRACT_CHECK");
@@ -196,10 +186,8 @@ namespace raccoon::contract
         }
 
         if (auto it = document.find("bundle"); it != document.end() && it->is_string()) r.bundle = it->get<std::string>();
-        json components;
         if (auto comps = document.find("components"); comps != document.end() && comps->is_object())
         {
-            components = *comps;
             if (auto tv = comps->find("raccoon-transport"); tv != comps->end() && tv->is_string())
             {
                 r.expectedTransportVersion = tv->get<std::string>();
@@ -214,24 +202,16 @@ namespace raccoon::contract
         const bool contractDev = expected == "dev";
         if (!contractDev && expected != r.ownHash) return finish(r, Outcome::Mismatch);
 
-        // The component's own version against the bundle's entry for it. Independent of the
-        // contract: a dev contract does not excuse a wrong version, and 'dev' in the
-        // component's own field omits only this comparison.
-        auto entry = components.is_object() ? components.find(r.bundleKey) : components.end();
-        if (!components.is_object() || entry == components.end() || !entry->is_string())
+        // The transport's own checks passed. Now the component's own check, if it has one: a
+        // refusing result of it refuses; otherwise a dev contract, then a dev result of the
+        // component, then ok. (The transport knows nothing about what it checks.)
+        const auto& own = options.componentCheck;
+        if (own && own->result != "ok" && own->result != "dev-warnung")
         {
-            return finish(r, Outcome::BundleError, "version-field-missing");
-        }
-        const std::string expectedVersion = trim(entry->get<std::string>());
-        if (expectedVersion.empty()) return finish(r, Outcome::BundleError, "version-field-empty");
-        r.expectedComponentVersion = expectedVersion;
-        const bool versionOmitted = expectedVersion == "dev";
-        if (!versionOmitted && normalizeVersion(expectedVersion) != normalizeVersion(componentVersion))
-        {
-            return finish(r, Outcome::VersionMismatch);
+            return finishByComponent(r, *own, Outcome::ComponentRefused);
         }
         if (contractDev) return finish(r, Outcome::DevWarning);
-        if (versionOmitted) return finish(r, Outcome::DevWarning, "version-omitted");
+        if (own && own->result == "dev-warnung") return finishByComponent(r, *own, Outcome::DevWarning);
         return finish(r, Outcome::Ok);
     }
 
@@ -245,9 +225,16 @@ namespace raccoon::contract
             {"own_transport_version", result.ownTransportVersion},
             {"expected_hash", nullable(result.expectedHash)},
             {"expected_transport_version", nullable(result.expectedTransportVersion)},
-            {"expected_component_version", nullable(result.expectedComponentVersion)},
+            {"component_check",
+             result.componentCheck
+                 ? json{{"name", result.componentCheck->name},
+                        {"result", result.componentCheck->result},
+                        {"reason", nullable(result.componentCheck->reason)},
+                        {"message", result.componentCheck->message},
+                        {"expected", nullable(result.componentCheck->expected)}}
+                 : json(nullptr)},
             {"bundle", nullable(result.bundle)},
-            {"result", outcomeName(result.outcome)},
+            {"result", result.result.empty() ? outcomeName(result.outcome) : result.result},
             {"reason", nullable(result.reason)},
             {"message", result.message},
             {"timestamp", utcNow()},
