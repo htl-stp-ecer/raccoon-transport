@@ -188,6 +188,22 @@ class AggregateTests(unittest.TestCase):
         self.assertTrue(summary["hashes_differ"])
         self.assertTrue(summary["ok"])  # dev mode never blocks
 
+    def test_components_with_a_dev_entry_are_listed(self):
+        self.bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa",
+                                       "components": {**json.loads(VERSIONS), "a": "dev"}})
+        self.status("a", "aaaa", True)
+        self.status("b", "aaaa", True)
+        summary = self.agg()
+        self.assertEqual(["a"], summary["dev_components"])
+        self.assertFalse(summary["dev_mode"])  # the contract itself is not in dev mode
+        self.assertTrue(summary["ok"])
+
+    def test_dead_run_component_with_dev_entry_is_not_listed(self):
+        self.bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa",
+                                       "components": {**json.loads(VERSIONS), "raccoon-lib": "dev"}})
+        self.status("raccoon-lib", "aaaa", False, pid=2**22 + 12345)
+        self.assertEqual([], self.agg()["dev_components"])
+
     def test_bundle_error_blocks(self):
         self.status("a", "aaaa", True)
         self.bundle.unlink()

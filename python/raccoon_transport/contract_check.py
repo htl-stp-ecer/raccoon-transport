@@ -377,6 +377,7 @@ def aggregate(
             "expected_hash": None,
             "dev_mode": False,
             "hashes_differ": False,
+            "dev_components": [],
             "components": [],
             "blocking": [],
             "ok": True,
@@ -411,12 +412,19 @@ def aggregate(
     if bundle["error"] is not None:
         blocking.insert(0, "bundle")
     active_hashes = {s.get("own_hash") for s in statuses if s.get("active") and s.get("own_hash")}
+    # Components whose own bundle entry is 'dev': their version is not compared.
+    dev_components = [
+        s["component"]
+        for s in statuses
+        if s.get("expected_component_version") == "dev" and (s.get("active") or s.get("persistent"))
+    ]
     return {
         "on_device": True,
         "bundle": bundle,
         "expected_hash": expected if bundle["error"] is None else None,
         "dev_mode": dev_mode,
         "hashes_differ": dev_mode and len(active_hashes) > 1,
+        "dev_components": dev_components,
         "components": statuses,
         "blocking": blocking,
         "ok": not blocking,

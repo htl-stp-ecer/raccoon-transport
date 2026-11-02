@@ -140,5 +140,5 @@ result and activity. A run is refused when a component with `mismatch`, `version
 exited stays blocking until it starts again and overwrites its file). A
 stale file of a non-persistent component (raccoon-lib from an earlier run) is
 ignored, otherwise a run could never start again after the cause was fixed.
-In dev mode, `hashes_differ` is true when the active
+The aggregate also lists `dev_components`: components whose own bundle entry is `dev` (`expected_component_version` is `dev`, also when the contract is in dev mode too) and that are active or persistent, so that CLI and UI can say which version checks are being skipped. In dev mode, `hashes_differ` is true when the active
 components do not all report the same own hash.
