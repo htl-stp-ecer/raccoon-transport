@@ -69,6 +69,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The contract hash is derived from the C++ sources. This fails when the
+      # generated constants are stale or when the Python/Dart messages no longer
+      # match the C++ wire layout (see scripts/contract.py).
+      - name: Check contract
+        run: |
+          python3 scripts/contract.py --check
+          python3 -m unittest scripts/test_contract.py -v
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -159,13 +167,25 @@ jobs:
           rm -rf python/dist
           cd python && python3 -m build --wheel
 
+      # The release carries the contract hash so the image build can learn the
+      # expected hash of a transport version without building it.
+      - name: Contract assets
+        run: |
+          python3 scripts/contract.py --check
+          mkdir -p release-assets
+          python3 scripts/contract.py --print > release-assets/contract-hash.txt
+          cp contract/contract.json release-assets/contract.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.version.outputs.number }}
           name: v${{ needs.version.outputs.number }}
           generate_release_notes: true
-          files: python/dist/raccoon_transport-*.whl
+          files: |
+            python/dist/raccoon_transport-*.whl
+            release-assets/contract-hash.txt
+            release-assets/contract.json
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4

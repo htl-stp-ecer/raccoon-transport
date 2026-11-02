@@ -9,6 +9,7 @@ This package exposes:
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
+from ._contract import CONTRACT_HASH, CONTRACT_MARKER
 from .channels import Channels, ProtocolChannels
 from .transport import Transport
 
@@ -17,4 +18,23 @@ try:
 except PackageNotFoundError:
     __version__ = "dev"
 
-__all__ = ["Transport", "Channels", "ProtocolChannels", "__version__"]
+def contract_hash() -> str:
+    """Contract hash compiled into this package (see ``scripts/contract.py``)."""
+    return CONTRACT_HASH
+
+
+def transport_version() -> str:
+    """Transport release for display. The contract hash is what is compared."""
+    return __version__
+
+
+__all__ = [
+    "Transport",
+    "Channels",
+    "ProtocolChannels",
+    "CONTRACT_HASH",
+    "CONTRACT_MARKER",
+    "contract_hash",
+    "transport_version",
+    "__version__",
+]
