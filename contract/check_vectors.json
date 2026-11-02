@@ -1,0 +1,149 @@
+{
+  "about": "Cases every implementation of the contract check must pass. See CHECK_SPEC.md.",
+  "defaults": {
+    "component": "stm32-data-reader",
+    "component_version": "v58",
+    "own_hash": "93ac36836810c9fe",
+    "own_version": "v69",
+    "bundle_file": "/etc/raccoon-bundle.json"
+  },
+  "cases": [
+    {
+      "name": "ok",
+      "on_device": true,
+      "bundle": "{\"bundle\":\"2026.11.02\",\"contract_hash\":\"93ac36836810c9fe\",\"components\":{\"raccoon-transport\":\"v69\"}}",
+      "result": "ok", "reason": null, "refuse": false,
+      "expected_hash": "93ac36836810c9fe",
+      "message": "contract ok: 93ac36836810c9fe"
+    },
+    {
+      "name": "ok ignores surrounding whitespace and unknown keys",
+      "on_device": true,
+      "bundle": "{\"contract_hash\":\"  93ac36836810c9fe \",\"future\":{\"a\":1}}",
+      "result": "ok", "reason": null, "refuse": false,
+      "expected_hash": "93ac36836810c9fe",
+      "message": "contract ok: 93ac36836810c9fe"
+    },
+    {
+      "name": "mismatch",
+      "on_device": true,
+      "bundle": "{\"bundle\":\"2026.11.02\",\"contract_hash\":\"1111111111111111\",\"components\":{\"raccoon-transport\":\"v70\"}}",
+      "result": "mismatch", "reason": null, "refuse": true,
+      "expected_hash": "1111111111111111",
+      "message": "transport contract mismatch: stm32-data-reader v58 uses contract 93ac36836810c9fe (transport v69), bundle 2026.11.02 expects 1111111111111111 (transport v70); update or reflash so all components match"
+    },
+    {
+      "name": "mismatch with unknown names",
+      "on_device": true,
+      "bundle": "{\"contract_hash\":\"1111111111111111\"}",
+      "result": "mismatch", "reason": null, "refuse": true,
+      "expected_hash": "1111111111111111",
+      "message": "transport contract mismatch: stm32-data-reader v58 uses contract 93ac36836810c9fe (transport v69), bundle unknown expects 1111111111111111 (transport unknown); update or reflash so all components match"
+    },
+    {
+      "name": "hash comparison is case sensitive",
+      "on_device": true,
+      "bundle": "{\"contract_hash\":\"93AC36836810C9FE\"}",
+      "result": "mismatch", "reason": null, "refuse": true,
+      "expected_hash": "93AC36836810C9FE",
+      "message": "transport contract mismatch: stm32-data-reader v58 uses contract 93ac36836810c9fe (transport v69), bundle unknown expects 93AC36836810C9FE (transport unknown); update or reflash so all components match"
+    },
+    {
+      "name": "dev mode warns and does not refuse",
+      "on_device": true,
+      "bundle": "{\"bundle\":\"x\",\"contract_hash\":\"dev\"}",
+      "result": "dev-warnung", "reason": null, "refuse": false,
+      "expected_hash": "dev",
+      "message": "transport contract check is in dev mode (bundle field is 'dev'): stm32-data-reader uses contract 93ac36836810c9fe (transport v69); mismatches are not enforced"
+    },
+    {
+      "name": "bundle file missing",
+      "on_device": true,
+      "bundle": null,
+      "result": "bundle-fehler", "reason": "file-missing", "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file is missing: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "bundle file is not json",
+      "on_device": true,
+      "bundle": "{\"contract_hash\": \"93ac",
+      "result": "bundle-fehler", "reason": "file-unreadable", "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file is unreadable: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "bundle file is zero bytes",
+      "on_device": true,
+      "bundle": "",
+      "result": "bundle-fehler", "reason": "file-unreadable", "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file is unreadable: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "bundle file is not an object",
+      "on_device": true,
+      "bundle": "[\"93ac36836810c9fe\"]",
+      "result": "bundle-fehler", "reason": "file-unreadable", "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file is unreadable: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "field missing",
+      "on_device": true,
+      "bundle": "{\"bundle\":\"2026.11.02\",\"components\":{}}",
+      "result": "bundle-fehler", "reason": "field-missing", "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file has no contract_hash field: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "field is not a string",
+      "on_device": true,
+      "bundle": "{\"contract_hash\":12}",
+      "result": "bundle-fehler", "reason": "field-missing", "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file has no contract_hash field: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "field empty",
+      "on_device": true,
+      "bundle": "{\"contract_hash\":\"\"}",
+      "result": "bundle-fehler", "reason": "field-empty", "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file has an empty contract_hash: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "field only whitespace",
+      "on_device": true,
+      "bundle": "{\"contract_hash\":\"   \"}",
+      "result": "bundle-fehler", "reason": "field-empty", "refuse": true,
+      "expected_hash": null,
+      "message": "transport contract check failed: bundle file has an empty contract_hash: /etc/raccoon-bundle.json"
+    },
+    {
+      "name": "not a device: missing file is skipped",
+      "on_device": false,
+      "bundle": null,
+      "result": "skipped", "reason": null, "refuse": false,
+      "expected_hash": null,
+      "message": "not running on a raccoon device; contract check skipped"
+    },
+    {
+      "name": "not a device: even a mismatching bundle is skipped",
+      "on_device": false,
+      "bundle": "{\"contract_hash\":\"1111111111111111\"}",
+      "result": "skipped", "reason": null, "refuse": false,
+      "expected_hash": null,
+      "message": "not running on a raccoon device; contract check skipped"
+    },
+    {
+      "name": "forced on a non-device",
+      "on_device": false,
+      "force": true,
+      "bundle": "{\"contract_hash\":\"1111111111111111\"}",
+      "result": "mismatch", "reason": null, "refuse": true,
+      "expected_hash": "1111111111111111",
+      "message": "transport contract mismatch: stm32-data-reader v58 uses contract 93ac36836810c9fe (transport v69), bundle unknown expects 1111111111111111 (transport unknown); update or reflash so all components match"
+    }
+  ]
+}

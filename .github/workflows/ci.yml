@@ -75,7 +75,7 @@ jobs:
       - name: Check contract
         run: |
           python3 scripts/contract.py --check
-          python3 -m unittest scripts/test_contract.py -v
+          python3 -m unittest scripts/test_contract.py python/tests/test_contract_check.py -v
 
       - name: Install build dependencies
         run: |
@@ -111,7 +111,7 @@ jobs:
 
       - name: Dart unit tests
         working-directory: dart
-        run: dart test test/transport_unit_test.dart
+        run: dart test test/transport_unit_test.dart test/contract_check_test.dart
 
       # ── Python ───────────────────────────────────────────
       - name: Install Python package

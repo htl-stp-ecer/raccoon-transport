@@ -10,6 +10,7 @@ export 'src/lcm/lcm.dart';
 // Transport
 export 'src/channels.dart';
 export 'src/contract.dart';
+export 'src/contract_check.dart';
 export 'src/transport.dart';
 
 // raccoon_ring SHM transport — Dart FFI bridge around the in-tree
