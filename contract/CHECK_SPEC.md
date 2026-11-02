@@ -107,6 +107,10 @@ A status file is **active** when its `pid` is alive and its `pid_starttime`
 still matches. Inactive files are reported as `active: false` and never
 deleted, so a reader that refused and exited stays visible.
 
+Off a Raccoon device (same rule as the check: no device marker directory and not
+forced) the aggregate is simply `ok` with `on_device: false`; the Pi server must be
+usable on a laptop for development and tests.
+
 The aggregate answers three things: the expected hash and transport version
 from the bundle file, whether dev mode is on, and the list of components with
 result and activity. A run is refused when a component with `mismatch` or

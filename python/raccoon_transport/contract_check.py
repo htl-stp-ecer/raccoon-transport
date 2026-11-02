@@ -304,11 +304,38 @@ def read_statuses(directory: Optional[str] = None) -> list[dict[str, Any]]:
     return entries
 
 
+def on_device(device_marker: Optional[str] = None, force: Optional[bool] = None) -> bool:
+    """True on a Raccoon device (or when the check is forced). Same rule as :func:`check`."""
+    device_marker = device_marker or os.environ.get("RACCOON_DEVICE_MARKER") or DEFAULT_DEVICE_MARKER
+    if force is None:
+        force = os.environ.get("RACCOON_CONTRACT_CHECK") == "force"
+    return bool(force) or Path(device_marker).is_dir()
+
+
 def aggregate(
-    *, bundle_file: Optional[str] = None, directory: Optional[str] = None, own_component: Optional[str] = None
+    *,
+    bundle_file: Optional[str] = None,
+    directory: Optional[str] = None,
+    device_marker: Optional[str] = None,
+    force: Optional[bool] = None,
 ) -> dict[str, Any]:
-    """What ``GET /contract`` of the Pi server returns."""
+    """What ``GET /contract`` of the Pi server returns.
+
+    Off a Raccoon device (laptop, simulation, tests) there is nothing to
+    enforce: the result is ``ok`` with ``on_device`` false.
+    """
     bundle_file = bundle_file or os.environ.get("RACCOON_BUNDLE_FILE") or DEFAULT_BUNDLE_FILE
+    if not on_device(device_marker, force):
+        return {
+            "on_device": False,
+            "bundle": {"file": bundle_file, "error": None},
+            "expected_hash": None,
+            "dev_mode": False,
+            "hashes_differ": False,
+            "components": [],
+            "blocking": [],
+            "ok": True,
+        }
     bundle: dict[str, Any] = {"file": bundle_file, "error": None}
     expected: Optional[str] = None
     try:
@@ -340,6 +367,7 @@ def aggregate(
         blocking.insert(0, "bundle")
     active_hashes = {s.get("own_hash") for s in statuses if s.get("active") and s.get("own_hash")}
     return {
+        "on_device": True,
         "bundle": bundle,
         "expected_hash": expected if bundle["error"] is None else None,
         "dev_mode": dev_mode,

@@ -128,7 +128,22 @@ class AggregateTests(unittest.TestCase):
             path.write_text(json.dumps(document))
 
     def agg(self):
-        return cc.aggregate(bundle_file=str(self.bundle), directory=str(self.run_dir))
+        return cc.aggregate(bundle_file=str(self.bundle), directory=str(self.run_dir),
+                            device_marker=str(self.dir / "image"))
+
+    def test_not_a_device_is_ok_and_empty(self):
+        summary = cc.aggregate(bundle_file=str(self.bundle), directory=str(self.run_dir),
+                               device_marker=str(self.dir / "nope"))
+        self.assertTrue(summary["ok"])
+        self.assertFalse(summary["on_device"])
+        self.assertEqual([], summary["components"])
+        self.assertIsNone(summary["bundle"]["error"])  # a missing bundle file is not an error off-device
+
+    def test_forced_aggregate_on_a_non_device_reports_the_bundle_error(self):
+        summary = cc.aggregate(bundle_file=str(self.bundle), directory=str(self.run_dir),
+                               device_marker=str(self.dir / "nope"), force=True)
+        self.assertFalse(summary["ok"])
+        self.assertEqual("file-missing", summary["bundle"]["error"])
 
     bundle_text = '{"bundle":"b","contract_hash":"aaaa","components":{"raccoon-transport":"v9"}}'
 
