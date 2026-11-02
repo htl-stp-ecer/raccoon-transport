@@ -31,6 +31,7 @@
 #include "raccoon/Transport.h"
 
 #include "raccoon/Channels.h"
+#include "raccoon/Contract.h"
 #include "raccoon/Dedup.h"
 #include "raccoon/ack_t.hpp"
 #include "raccoon/raccoon_ring.h"
@@ -985,5 +986,35 @@ namespace raccoon
         impl_->spinIdleCount = 0;
         impl_->channelStats.clear();
         return out;
+    }
+}
+
+// ── Contract marker ────────────────────────────────────────────────────────
+// A fixed string in read-only data. It costs nothing at run time and lets the
+// image build read the contract hash out of a finished binary without running
+// it (search for "RACCOON_CONTRACT_V1="). It lives in this translation unit
+// because every user of the library links it; `retain` keeps the linker from
+// discarding it under --gc-sections.
+#if defined(__has_attribute)
+#  if __has_attribute(retain)
+#    define RACCOON_RETAIN __attribute__((used, retain))
+#  endif
+#endif
+#ifndef RACCOON_RETAIN
+#  define RACCOON_RETAIN __attribute__((used))
+#endif
+
+#ifndef RACCOON_TRANSPORT_VERSION
+#  define RACCOON_TRANSPORT_VERSION "dev"
+#endif
+
+extern "C" RACCOON_RETAIN const char raccoon_contract_marker[] =
+    "RACCOON_CONTRACT_V1=" RACCOON_CONTRACT_HASH_LITERAL;
+
+namespace raccoon::contract
+{
+    const char* version() noexcept
+    {
+        return RACCOON_TRANSPORT_VERSION;
     }
 }

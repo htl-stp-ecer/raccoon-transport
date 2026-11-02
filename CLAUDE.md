@@ -7,6 +7,25 @@ raccoon-transport is a shared LCM (Lightweight Communications and Marshalling) t
 2. Channel definitions in C++, Dart, and Python
 3. A transport layer with optional at-least-once reliable delivery and retain (latest-value-on-subscribe)
 
+## Contract hash
+
+Components must agree on the wire layout, so the transport has one short
+identifier of it: the contract hash. It is computed by `scripts/contract.py`
+from the C++ sources (message structs, channel names, ring version) and written
+to `contract/contract.json` plus generated constants for C++
+(`cpp/include/raccoon/Contract.h`), Python (`raccoon_transport/_contract.py`)
+and Dart (`dart/lib/src/contract.dart`). Every binary also carries the string
+`RACCOON_CONTRACT_V1=<hash>` so a build can read it without running it.
+
+- After changing a message struct, a channel or the ring layout, run
+  `python3 scripts/contract.py --write` and commit the result.
+- `python3 scripts/contract.py --check` (also run in CI) fails if a generated
+  file is stale or if the Python/Dart messages drifted from C++.
+- Tests: `python3 -m unittest scripts/test_contract.py`.
+- The release publishes `contract-hash.txt` and `contract.json` as assets.
+- The wire format is hand-written in each language; the `.lcm` / LCM sections
+  below are historical.
+
 ## Build Commands
 
 ### C++ (via CMake):

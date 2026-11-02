@@ -18,6 +18,9 @@ target_include_directories(raccoon_transport PUBLIC
 target_link_libraries(raccoon_transport PUBLIC
     raccoon::messages
 )
+
+target_compile_definitions(raccoon_transport PRIVATE
+    RACCOON_TRANSPORT_VERSION="${RACCOON_TRANSPORT_VERSION}")
 # raccoon_ring uses POSIX shm + pthreads via stdatomic; on glibc both are
 # in libc. Link explicitly anyway in case some downstream uses a libc
 # variant that breaks them out.
