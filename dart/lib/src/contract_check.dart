@@ -10,6 +10,12 @@ import 'dart:io';
 
 import 'contract.dart';
 
+// The own hash is derived from the marker string, not from the separate hash
+// constant. That keeps the full "RACCOON_CONTRACT_V1=<hash>" literal reachable
+// from the startup check, so it survives tree shaking in the AOT build and the
+// image build can find it in the compiled app.
+String _ownHashFromMarker() => raccoonContractMarker.substring(raccoonContractMarker.indexOf('=') + 1);
+
 /// Reserved exit code of a component that refuses to start.
 const int contractExitCode = 78;
 
@@ -102,7 +108,7 @@ ContractCheckResult checkContract(
   final r = ContractCheckResult(
     component: component,
     componentVersion: componentVersion,
-    ownHash: ownHash ?? raccoonContractHash,
+    ownHash: ownHash ?? _ownHashFromMarker(),
     ownTransportVersion: ownVersion ?? transportVersion,
     bundleFile: bundlePath,
   );
