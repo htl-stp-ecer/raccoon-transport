@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.22)
 
 add_library(raccoon_transport STATIC
     src/Transport.cpp
+    src/ContractCheck.cpp
     src/raccoon_ring.c
 )
 
@@ -18,6 +19,13 @@ target_include_directories(raccoon_transport PUBLIC
 target_link_libraries(raccoon_transport PUBLIC
     raccoon::messages
 )
+
+# nlohmann/json is vendored and only used inside ContractCheck.cpp.
+target_include_directories(raccoon_transport PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+
+target_compile_definitions(raccoon_transport PRIVATE
+    RACCOON_TRANSPORT_VERSION="${RACCOON_TRANSPORT_VERSION}")
 # raccoon_ring uses POSIX shm + pthreads via stdatomic; on glibc both are
 # in libc. Link explicitly anyway in case some downstream uses a libc
 # variant that breaks them out.
@@ -32,6 +40,16 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clan
 endif()
 
 if (BUILD_TESTING)
+    add_executable(raccoon_transport_contract_check_tests tests/test_contract_check.cpp)
+    target_link_libraries(raccoon_transport_contract_check_tests PRIVATE raccoon_transport)
+    target_include_directories(raccoon_transport_contract_check_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+    target_compile_definitions(raccoon_transport_contract_check_tests PRIVATE
+        RACCOON_CHECK_VECTORS="${PROJECT_SOURCE_DIR}/contract/check_vectors.json")
+    add_test(NAME raccoon_transport_contract_check_tests
+        COMMAND raccoon_transport_contract_check_tests)
+
     add_executable(raccoon_transport_producer_restart_tests
         tests/test_producer_restart.cpp)
     target_link_libraries(raccoon_transport_producer_restart_tests PRIVATE
