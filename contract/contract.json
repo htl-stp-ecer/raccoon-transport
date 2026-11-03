@@ -1,5 +1,5 @@
 {
-  "hash": "32ea5368ba914035",
+  "hash": "93ac36836810c9fe",
   "format": 1,
   "ring": {
     "magic": 1380143682,
@@ -52,15 +52,11 @@
     "raccoon/odometry/wz",
     "raccoon/screen_render",
     "raccoon/screen_render/answer",
-    "raccoon/servo/{port}/done",
-    "raccoon/servo/{port}/feedback",
-    "raccoon/servo/{port}/health",
     "raccoon/servo/{port}/mode",
     "raccoon/servo/{port}/mode_cmd",
     "raccoon/servo/{port}/position",
     "raccoon/servo/{port}/position_cmd",
     "raccoon/servo/{port}/smooth_cmd",
-    "raccoon/servo/{port}/velocity_cmd",
     "raccoon/system/heartbeat_cmd",
     "raccoon/system/shutdown_cmd",
     "raccoon/system/shutdown_status",
