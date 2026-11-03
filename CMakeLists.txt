@@ -3,6 +3,10 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 cmake_minimum_required(VERSION 3.22)
 project(raccoon_transport VERSION 0.1.0 LANGUAGES C CXX)
 
+# Human-readable transport release, shown in version/contract messages. The
+# contract hash, not this number, decides whether components fit together.
+set(RACCOON_TRANSPORT_VERSION "dev" CACHE STRING "Transport release shown in messages")
+
 include(CTest)
 
 set(CMAKE_CXX_STANDARD 20)
