@@ -228,7 +228,7 @@ jobs:
           app-id: ${{ vars.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           owner: htl-stp-ecer
-          repositories: raccoon-lib,stm32-data-reader,botui
+          repositories: raccoon-lib,stm32-data-reader,botui,raccoon-image
           permission-contents: write
 
       - name: Dispatch transport-released
@@ -249,3 +249,20 @@ jobs:
               echo "::warning::could not notify $repo"
             fi
           done
+
+      # raccoon-image keeps the transport version of bundles/dev.json (bundle.yml
+      # reads the latest release of every component when this arrives).
+      - name: Dispatch component-released
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::no app token; raccoon-image was not notified"
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/htl-stp-ecer/raccoon-image/dispatches \
+            -d '{"event_type":"component-released","client_payload":{"component":"raccoon-transport","version":"v${{ needs.version.outputs.number }}"}}' \
+            || echo "::warning::could not notify raccoon-image"
