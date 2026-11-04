@@ -5,7 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch: 
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release: tag, GitHub release, PyPI and notify the other repositories. Untick to only build and test (also works on a branch)."
+        type: boolean
+        default: true
 
 # One release at a time: the number is decided at the start of the run.
 concurrency:
@@ -19,7 +24,7 @@ jobs:
   version:
     name: Release number
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || !inputs.release))
     outputs:
       number: ${{ steps.next.outputs.number }}
     steps:
@@ -146,7 +151,7 @@ jobs:
 
   build-and-release:
     needs: [build-and-test, version]
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || !inputs.release))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -164,6 +169,7 @@ jobs:
         run: python3 build.py --version ${{ needs.version.outputs.number }}
 
       - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.version.outputs.number }}
@@ -182,6 +188,7 @@ jobs:
 
   publish-pypi:
     needs: build-and-release
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -204,6 +211,7 @@ jobs:
   # warns: the release itself is already published.
   notify-components:
     needs: [publish-pypi, version]
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
     runs-on: ubuntu-latest
 
     steps:
