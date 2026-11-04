@@ -779,10 +779,17 @@ namespace raccoon
                     // copy needs apiMutex.
                     handlersCopy = sub->handlers;
                 }
+                // Same accounting as the drain pass above: every frame handed to a user
+                // handler counts as a delivery (recordLatency skips payloads < 8 bytes).
+                const auto cbStart = std::chrono::steady_clock::now();
                 for (auto& h : handlersCopy) {
                     try { h(data, (int)len); }
                     catch (...) {}
                 }
+                const auto cbEnd = std::chrono::steady_clock::now();
+                c->t->recordCallback(sub->channel,
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        cbEnd - cbStart).count());
                 ++(*c->delivered_out);
                 return 0;
             };
