@@ -96,6 +96,50 @@ namespace
         require(reset.channels.empty(), "per-channel stats should reset after retrieval");
     }
 
+    // A frame that arrives while spinOnce() is parked can be delivered by the wait path instead of
+    // the drain pass. Both must count it as a delivery, also when the payload is shorter than the
+    // 8 bytes of a timestamp (there is no latency sample then). Repeated, because which path takes
+    // a frame depends on the timing.
+    void testParkedDeliveryOfSmallPayloadIsCounted()
+    {
+        constexpr int kFrames = 30;
+        // The ring of a channel outlives the process (shared memory): a name of its own for every
+        // run keeps frames of an earlier run from being delivered here.
+        const std::string channel = "unit/parked-" + std::to_string(::getpid());
+        auto transport = raccoon::Transport::create();
+        std::atomic<int> received{0};
+        require(transport.subscribeRaw(channel,
+                    [&](const void*, int) { ++received; }),
+                "raw subscribe failed");
+
+        for (int i = 0; i < kFrames; ++i)
+        {
+            std::thread publisher([&]
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                const uint8_t payload[4] = {1, 2, 3, 4};
+                transport.publishRaw(channel, payload, sizeof(payload));
+            });
+
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (received.load() <= i && std::chrono::steady_clock::now() < deadline)
+            {
+                transport.spinOnce(500);
+            }
+            publisher.join();
+            require(received.load() == i + 1, "every small frame should be delivered once (i=" +
+                        std::to_string(i) + ", received=" + std::to_string(received.load()) + ")");
+        }
+
+        auto stats = transport.getAndResetStats();
+        require(stats.channels.size() == 1 && stats.channels.front().name == channel,
+                "per-channel stats should contain the channel");
+        require(stats.channels.front().deliveries == kFrames,
+                "every delivery should be counted, whichever path delivered it");
+        require(stats.channels.front().callback.count == kFrames,
+                "every delivery should record a callback sample");
+    }
+
     void testHeartbeatStaysOnTimeWhileWritersFlood()
     {
         // Models the production layout: one daemon publishing at a fixed
@@ -394,6 +438,7 @@ int main()
         {"typed subscription records and resets latency stats", testTypedSubscriptionRecordsAndResetsLatencyStats},
         {"value channel deduplicates identical payloads", testValueChannelDeduplicatesIdenticalPayloads},
         {"command channel never deduplicates", testCommandChannelNeverDeduplicates},
+        {"parked delivery of a small payload is counted", testParkedDeliveryOfSmallPayloadIsCounted},
         {"heartbeat stays on time while writers flood", testHeartbeatStaysOnTimeWhileWritersFlood},
         {"subscriber callback can publish back (recursive)", testSubscriberCallbackCanPublishBack},
         {"oversized publish grows ring and republishes", testOversizedPublishGrowsRingAndRepublishes},

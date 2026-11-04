@@ -96,6 +96,15 @@ t.publish(Channels.motor_power_command(0), cmd.encode())
 
 ## Building from Source
 
+### Python wheel and contract assets (Docker)
+
+```bash
+python3 build.py                 # result in builds/, version 0.0
+python3 deploy.py --host <pi>    # install it on a Pi for development
+```
+
+Needs only Docker and Python 3. Writes the wheel, `contract-hash.txt` and `contract.json` to `builds/`.
+
 ### C++
 
 ```bash
