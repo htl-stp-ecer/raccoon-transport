@@ -205,17 +205,16 @@ jobs:
         with:
           packages-dir: dist/
 
-  # Tell the components that compile raccoon-transport that a new release is out,
-  # so each one can open a pull request that moves its submodule to the new tag.
-  # Runs after PyPI so the tag and the package both exist. A failure here only
-  # warns: the release itself is already published.
+  # Tell raccoon-image that a new release is out. Runs after PyPI so the tag and
+  # the package both exist. A failure here only warns: the release itself is
+  # already published.
   notify-components:
     needs: [publish-pypi, version]
     if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
     runs-on: ubuntu-latest
 
     steps:
-      - name: Create an app token for the components
+      - name: Create an app token for raccoon-image
         id: app-token
         continue-on-error: true
         uses: actions/create-github-app-token@v3
@@ -223,27 +222,8 @@ jobs:
           app-id: ${{ vars.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           owner: htl-stp-ecer
-          repositories: raccoon-lib,stm32-data-reader,botui,raccoon-image
+          repositories: raccoon-image
           permission-contents: write
-
-      - name: Dispatch transport-released
-        env:
-          TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::warning::no app token; components were not notified"
-            exit 0
-          fi
-          for repo in raccoon-lib stm32-data-reader botui; do
-            if ! curl -fsS -X POST \
-              -H "Authorization: Bearer $TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/htl-stp-ecer/$repo/dispatches" \
-              -d '{"event_type":"transport-released","client_payload":{"version":"${{ needs.version.outputs.number }}","tag":"v${{ needs.version.outputs.number }}","sha":"${{ github.sha }}"}}'
-            then
-              echo "::warning::could not notify $repo"
-            fi
-          done
 
       # raccoon-image keeps the transport version of bundles/dev.json (bundle.yml
       # reads the latest release of every component when this arrives).
