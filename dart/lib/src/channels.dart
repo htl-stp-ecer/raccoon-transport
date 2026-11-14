@@ -47,12 +47,10 @@ class Channels {
   static String motorStopCommand(int port) => 'raccoon/motor/$port/stop_cmd';
   static String motorVelocityCommand(int port) => 'raccoon/motor/$port/velocity_cmd';
   static String motorPositionCommand(int port) => 'raccoon/motor/$port/position_cmd';
-  static String motorRelativeCommand(int port) => 'raccoon/motor/$port/relative_cmd';
   static String motorPidCommand(int port) => 'raccoon/motor/$port/pid_cmd';
   static String motorPositionResetCommand(int port) => 'raccoon/motor/$port/position_reset_cmd';
   static String motorPower(int port) => 'raccoon/motor/$port/power';
   static String motorPosition(int port) => 'raccoon/motor/$port/position';
-  static String motorDone(int port) => 'raccoon/motor/$port/done';
 }
 
 /// Internal protocol channels

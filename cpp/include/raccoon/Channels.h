@@ -166,11 +166,6 @@ namespace raccoon::Channels
         RACCOON_CACHED_CHANNEL("raccoon/motor/", "/position_cmd");
     }
 
-    inline const std::string& motorRelativeCommand(const PortId port)
-    {
-        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/relative_cmd");
-    }
-
     inline const std::string& motorPidCommand(const PortId port)
     {
         RACCOON_CACHED_CHANNEL("raccoon/motor/", "/pid_cmd");
@@ -189,11 +184,6 @@ namespace raccoon::Channels
     inline const std::string& motorPosition(const PortId port)
     {
         RACCOON_CACHED_CHANNEL("raccoon/motor/", "/position");
-    }
-
-    inline const std::string& motorDone(const PortId port)
-    {
-        RACCOON_CACHED_CHANNEL("raccoon/motor/", "/done");
     }
 
     // Command-vs-value classification.

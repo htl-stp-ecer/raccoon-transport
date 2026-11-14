@@ -94,10 +94,6 @@ class Channels:
         return f"raccoon/motor/{port}/position_cmd"
 
     @staticmethod
-    def motor_relative_command(port: int) -> str:
-        return f"raccoon/motor/{port}/relative_cmd"
-
-    @staticmethod
     def motor_pid_command(port: int) -> str:
         return f"raccoon/motor/{port}/pid_cmd"
 
@@ -112,10 +108,6 @@ class Channels:
     @staticmethod
     def motor_position(port: int) -> str:
         return f"raccoon/motor/{port}/position"
-
-    @staticmethod
-    def motor_done(port: int) -> str:
-        return f"raccoon/motor/{port}/done"
 
     @staticmethod
     def is_command_channel(channel: str) -> bool:
