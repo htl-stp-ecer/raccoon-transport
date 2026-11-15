@@ -6,13 +6,13 @@
 
 **The shared message and transport layer for RaccoonOS — shared-memory messaging across C++, Python, and Dart.**
 
+![C++20](https://img.shields.io/badge/C%2B%2B20-00599C?logo=cplusplus&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=ffdd54)
+![Dart](https://img.shields.io/badge/Dart-02569B?logo=dart&logoColor=white)
 [![CI](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/htl-stp-ecer/raccoon-transport)](https://github.com/htl-stp-ecer/raccoon-transport/releases/latest)
 [![PyPI](https://img.shields.io/pypi/v/raccoon-transport?logo=pypi&logoColor=white)](https://pypi.org/project/raccoon-transport/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
-![C++20](https://img.shields.io/badge/C%2B%2B20-00599C?logo=cplusplus&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=ffdd54)
-![Dart](https://img.shields.io/badge/Dart-02569B?logo=dart&logoColor=white)
 
 > 📖 **Full documentation at [raccoon-docs.pages.dev](https://raccoon-docs.pages.dev/)**
 
