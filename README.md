@@ -185,18 +185,6 @@ Defined in `messages/types/*.lcm` under the `raccoon` package:
 
 ---
 
-## Part of RaccoonOS
-
-| Repository | What it is |
-|:-----------|:-----------|
-| [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib) | Core robotics library — PID, kinematics, step-based missions |
-| [stm32-data-reader](https://github.com/htl-stp-ecer/stm32-data-reader) | Raspberry Pi ↔ STM32 SPI bridge |
-| [raccoon-cli](https://github.com/htl-stp-ecer/raccoon-cli) | Dev toolchain — scaffolding, codegen, remote sync |
-| [botui](https://github.com/htl-stp-ecer/botui) | Flutter desktop environment |
-| [documentation](https://raccoon-docs.pages.dev/) | Full platform docs |
-
----
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add message types, run tests, and submit changes.
