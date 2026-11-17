@@ -26,6 +26,18 @@
 #include <time.h>
 #include <unistd.h>
 
+// A reader that stops waiting gives its waiter_count back, but never below zero: a count
+// that was reset while it waited would otherwise wrap to 0xFFFFFFFF, and the next wait
+// would bring it to 0 again while a reader is parked, which hides that reader from writers.
+static void waiter_leave(_Atomic uint32_t* count) {
+    uint32_t cur = atomic_load_explicit(count, memory_order_relaxed);
+    while (cur > 0 &&
+           !atomic_compare_exchange_weak_explicit(count, &cur, cur - 1,
+                                                  memory_order_release,
+                                                  memory_order_relaxed)) {
+    }
+}
+
 // ---- Futex glue --------------------------------------------------------
 //
 // We use raw FUTEX_WAIT / FUTEX_WAKE on a uint32_t living in the ring
@@ -252,6 +264,17 @@ static int shm_open_mmap(const char* path,
         // on every restart — that's fine, the .seq starts back at 0 and
         // subscribers naturally lose their old last_seen reference.
         ring_hdr_t* h = (ring_hdr_t*)base;
+        // Readers may be parked in a futex wait on this very ring (a long-running service
+        // while a new program starts). wake_seq and waiter_count are THEIR state, shared
+        // with the writer: resetting waiter_count to 0 makes the writer believe nobody
+        // waits, it skips FUTEX_WAKE and the parked reader only wakes when its own
+        // timeout runs out (up to a second late). So an existing ring with the same
+        // layout keeps both; only a new or re-laid-out ring starts from zero.
+        const int same_layout =
+            h->magic == RRB_MAGIC && h->version == RRB_VERSION &&
+            h->slot_count == want_slot_count &&
+            h->slot_size == (uint32_t)slot_stride(want_max_payload) &&
+            h->max_payload == want_max_payload;
         h->magic       = RRB_MAGIC;
         h->version     = RRB_VERSION;
         h->slot_count  = want_slot_count;
@@ -259,8 +282,10 @@ static int shm_open_mmap(const char* path,
         h->max_payload = want_max_payload;
         // (wake_seq replaced the old _reserved0 padding slot.)
         atomic_store_explicit(&h->producer_seq, 0, memory_order_release);
-        atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
-        atomic_store_explicit(&h->waiter_count, 0u, memory_order_release);
+        if (!same_layout) {
+            atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
+            atomic_store_explicit(&h->waiter_count, 0u, memory_order_release);
+        }
         strncpy(h->channel_name, channel_name, sizeof(h->channel_name) - 1);
         h->channel_name[sizeof(h->channel_name) - 1] = '\0';
         // Zero every slot's seq field so the first publish wraps cleanly.
@@ -363,6 +388,12 @@ rrb_writer_t* rrb_writer_create_multi(const char* channel,
                           MAP_SHARED, w->fd, 0);
         if (base == MAP_FAILED) goto fail;
         ring_hdr_t* h = (ring_hdr_t*)base;
+        // Keep wake_seq/waiter_count of an existing ring with this layout (see shm_open_mmap).
+        const int same_layout =
+            h->magic == RRB_MAGIC && h->version == RRB_VERSION &&
+            h->slot_count == slot_count &&
+            h->slot_size == (uint32_t)slot_stride(max_payload) &&
+            h->max_payload == max_payload;
         h->magic = 0;  // readers treat the ring as "not ready" until the end
         h->version = RRB_VERSION;
         h->slot_count = slot_count;
@@ -371,8 +402,10 @@ rrb_writer_t* rrb_writer_create_multi(const char* channel,
         h->flags = RRB_FLAG_MULTI_PRODUCER;
         atomic_store_explicit(&h->producer_seq, 0, memory_order_release);
         atomic_store_explicit(&h->claim_seq, 0, memory_order_release);
-        atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
-        atomic_store_explicit(&h->waiter_count, 0u, memory_order_release);
+        if (!same_layout) {
+            atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
+            atomic_store_explicit(&h->waiter_count, 0u, memory_order_release);
+        }
         strncpy(h->channel_name, channel, sizeof(h->channel_name) - 1);
         h->channel_name[sizeof(h->channel_name) - 1] = '\0';
         uint8_t* slot_base = (uint8_t*)base + sizeof(ring_hdr_t);
@@ -844,8 +877,7 @@ int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
     uint32_t expected = atomic_load_explicit(&r->hdr->wake_seq,
                                              memory_order_acquire);
     (void)futex_wait_until(&r->hdr->wake_seq, expected, timeout_us);
-    atomic_fetch_sub_explicit(&r->hdr->waiter_count, 1u,
-                              memory_order_release);
+    waiter_leave(&r->hdr->waiter_count);
     // EAGAIN, EINTR, ETIMEDOUT all fall through — re-poll either way.
     return rrb_reader_recv(r, buf, buf_size, out_len);
 }
@@ -969,8 +1001,7 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
     for (size_t i = 0; i < n; ++i) {
         rrb_reader_t* r = readers[i];
         if (!r || !r->base) continue;
-        atomic_fetch_sub_explicit(&r->hdr->waiter_count, 1u,
-                                  memory_order_release);
+        waiter_leave(&r->hdr->waiter_count);
     }
 
     // Pass 3: post-wake drain. Whatever woke us probably has data; the
