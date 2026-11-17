@@ -670,20 +670,6 @@ rrb_reader_t* rrb_reader_open(const char* channel) {
     return r;
 }
 
-// The highest published sequence number a reader may trust. On a multi-producer
-// ring no frame can have a number above the tickets handed out, so a producer_seq
-// that is ahead of claim_seq is stale (left behind by a writer that does not know
-// the tickets) and is not followed; the next multi-producer writer lifts the tickets
-// above it. On a normal ring this is just producer_seq.
-static uint64_t mp_producer_seq(ring_hdr_t* h) {
-    uint64_t producer = atomic_load_explicit(&h->producer_seq, memory_order_acquire);
-    if (h->flags & RRB_FLAG_MULTI_PRODUCER) {
-        uint64_t claimed = atomic_load_explicit(&h->claim_seq, memory_order_acquire);
-        if (claimed < producer) producer = claimed;
-    }
-    return producer;
-}
-
 int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len) {
     if (!r || !buf || !out_len) return -1;
     *out_len = 0;
@@ -722,14 +708,16 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
             r->last_seen = 0;
         }
 
-        uint64_t producer = mp_producer_seq(r->hdr);
+        uint64_t producer = atomic_load_explicit(&r->hdr->producer_seq,
+                                                 memory_order_acquire);
         if (producer == r->last_seen) {
             // No new data.  The underlying file may have been unlinked
             // and replaced since we last attached — if so, re-attach so
             // the next poll sees the fresh inode.
             reader_reopen_if_unlinked(r);
             if (!r->base || !r->hdr) return 1;  // detached + reattach failed → bail
-            producer = mp_producer_seq(r->hdr);
+            producer = atomic_load_explicit(&r->hdr->producer_seq,
+                                            memory_order_acquire);
             if (producer == r->last_seen) return 1;
         }
 

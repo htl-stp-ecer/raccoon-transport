@@ -261,6 +261,38 @@ namespace
         cleanup(kCh);
     }
 
+
+    // 7. During a rollout an old (single-producer) process may still write acks into a
+    //    ring a new process flagged multi-producer. It only knows producer_seq, so a
+    //    reader must keep following producer_seq: its acks must stay visible.
+    void testAcksOfAnOldWriterStayVisible()
+    {
+        cleanup(kCh);
+        rrb_writer_t* mp = rrb_writer_create_multi(kCh, 64, 2048);
+        require(mp != nullptr, "create");
+        for (uint32_t n = 0; n < 5; ++n)
+        {
+            Frame f{1, n};
+            require(rrb_writer_publish(mp, &f, sizeof(f)) == 0, "publish");
+        }
+        rrb_writer_t* old = rrb_writer_create(kCh, 64, 2048);  // old process starts: resets in place
+        require(old != nullptr, "legacy create");
+        rrb_reader_t* r = rrb_reader_open(kCh);
+        for (uint32_t n = 100; n < 110; ++n)
+        {
+            Frame f{2, n};
+            require(rrb_writer_publish(old, &f, sizeof(f)) == 0, "legacy publish");
+        }
+        auto got = readFor(r, 500);
+        for (uint32_t n = 100; n < 110; ++n)
+            require(got.count((uint64_t(2) << 32) | n) == 1,
+                    "ack " + std::to_string(n) + " of an old writer is invisible to a new reader");
+        rrb_reader_close(r);
+        rrb_writer_destroy(old);
+        rrb_writer_destroy(mp);
+        cleanup(kCh);
+    }
+
     // 4. The real topology: one publisher, several subscriber processes (each a
     //    separate ACK writer), lots of reliable commands. Nothing may need a
     //    retransmit and nothing may be given up on.
@@ -330,6 +362,7 @@ int main()
     failed += run("dead_writer_does_not_wedge", testDeadWriterDoesNotWedge);
     failed += run("stale_high_producer_seq_is_healed", testStaleHighProducerSeqIsHealed);
     failed += run("ring_reset_by_old_writer_does_not_stall_readers", testRingResetByOldWriterDoesNotStallReaders);
+    failed += run("acks_of_an_old_writer_stay_visible", testAcksOfAnOldWriterStayVisible);
     failed += run("many_ackers_one_publisher", testManyAckersOnePublisher);
     return failed ? 1 : 0;
 }
