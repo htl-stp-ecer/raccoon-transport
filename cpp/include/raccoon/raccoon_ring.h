@@ -27,10 +27,11 @@
 // * No zero-copy. Producer copies into the slot, subscriber copies out.
 //   For raccoon's typical sensor frames (< 100 bytes LCM-encoded) this
 //   is single-digit microseconds — well below the 100 Hz publish budget.
-// * Single producer per channel. Multiple producers would need a CAS
-//   on the sequence counter; we don't need that — raccoon's reader is
-//   the sole publisher of every sensor channel, and the bridge is the
-//   sole publisher of any command channel it owns.
+// * Single producer per channel. The exception is the reliable-delivery ACK
+//   channel, which every subscriber process writes to: it uses the opt-in
+//   multi-producer mode (rrb_writer_create_multi). All other channels stay
+//   single-producer — raccoon's reader is the sole publisher of every sensor
+//   channel, and the bridge is the sole publisher of any command channel it owns.
 //
 // Safety model
 // ------------
@@ -77,6 +78,12 @@ extern "C" {
 #define RRB_DEFAULT_SLOT_COUNT   64u
 #define RRB_DEFAULT_MAX_PAYLOAD  2048u
 
+// Header flag: this ring has several writers (see rrb_writer_create_multi).
+#define RRB_FLAG_MULTI_PRODUCER 0x1u
+// A multi-producer reader waits this long for a claimed-but-unwritten slot
+// before it assumes the writer died and skips it.
+#define RRB_MP_STALL_NS 20000000ull  /* 20 ms */
+
 typedef struct rrb_writer_s rrb_writer_t;
 typedef struct rrb_reader_s rrb_reader_t;
 
@@ -97,6 +104,22 @@ typedef struct rrb_reader_s rrb_reader_t;
 rrb_writer_t* rrb_writer_create(const char* channel,
                                 uint32_t slot_count,
                                 uint32_t max_payload);
+
+// Multi-producer variant, for channels written by SEVERAL processes (the ACK
+// channel: every subscriber process acks into it). Differences to
+// rrb_writer_create:
+//  * An existing valid multi-producer ring is attached as-is and never wiped,
+//    so a second process starting up cannot erase frames the first one wrote.
+//    It keeps the geometry its first creator chose.
+//  * Slots are claimed with an atomic fetch_add, so two writers never fill the
+//    same slot. Readers wait for a claimed slot to be filled.
+// Limits: ordering between writers is by claim, a writer that stalls for a
+// whole ring lap can have its slot overwritten (use only for small, frequent,
+// loss-tolerant frames), and a ring that was created single-producer is
+// re-initialised. Returns NULL on hard error.
+rrb_writer_t* rrb_writer_create_multi(const char* channel,
+                                      uint32_t slot_count,
+                                      uint32_t max_payload);
 
 // Publish one frame. Bumps the producer sequence counter, writes payload
 // into the next slot. Always succeeds unless `data == NULL` or `len`
