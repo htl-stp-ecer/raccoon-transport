@@ -430,6 +430,18 @@ namespace raccoon
             if (slots > RRB_DEFAULT_SLOT_COUNT) slots = RRB_DEFAULT_SLOT_COUNT;
         }
 
+        // The ACK channel is written by every subscriber process, so it needs the
+        // multi-producer ring; every other channel has exactly one writer.
+        static rrb_writer_t* createWriter(const std::string& channel,
+                                          size_t slots, size_t want)
+        {
+            if (channel == raccoon::Channels::Protocol::ACK)
+                return rrb_writer_create_multi(channel.c_str(), (uint32_t)slots,
+                                               (uint32_t)want);
+            return rrb_writer_create(channel.c_str(), (uint32_t)slots,
+                                     (uint32_t)want);
+        }
+
         rrb_writer_t* writerFor(const std::string& channel, size_t size_hint)
         {
             auto it = publishers.find(channel);
@@ -438,10 +450,7 @@ namespace raccoon
             size_t slots = 0, want = 0;
             sizeRing(size_hint, slots, want);
 
-            rrb_writer_t* w = rrb_writer_create(
-                channel.c_str(),
-                (uint32_t)slots,
-                (uint32_t)want);
+            rrb_writer_t* w = createWriter(channel, slots, want);
             if (!w)
             {
                 std::cerr << "raccoon::Transport: rrb_writer_create('"
@@ -471,10 +480,7 @@ namespace raccoon
             if (want <= it->second.max_payload) return it->second.writer;
 
             rrb_writer_destroy(it->second.writer);
-            rrb_writer_t* w = rrb_writer_create(
-                channel.c_str(),
-                (uint32_t)slots,
-                (uint32_t)want);
+            rrb_writer_t* w = createWriter(channel, slots, want);
             if (!w)
             {
                 std::cerr << "raccoon::Transport: rrb_writer_create('"

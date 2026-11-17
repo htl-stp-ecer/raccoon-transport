@@ -91,4 +91,13 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_reliable_delivery_tests
         COMMAND raccoon_transport_reliable_delivery_tests)
+
+    add_executable(raccoon_transport_multi_producer_ring_tests
+        tests/test_multi_producer_ring.cpp)
+    target_link_libraries(raccoon_transport_multi_producer_ring_tests PRIVATE
+        raccoon_transport)
+    target_include_directories(raccoon_transport_multi_producer_ring_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_multi_producer_ring_tests
+        COMMAND raccoon_transport_multi_producer_ring_tests)
 endif()
