@@ -82,7 +82,7 @@ extern "C" {
 #define RRB_FLAG_MULTI_PRODUCER 0x1u
 // A multi-producer reader waits this long for a claimed-but-unwritten slot
 // before it assumes the writer died and skips it.
-#define RRB_MP_STALL_NS 20000000ull  /* 20 ms */
+#define RRB_MP_STALL_NS 2000000ull  /* 2 ms */
 
 typedef struct rrb_writer_s rrb_writer_t;
 typedef struct rrb_reader_s rrb_reader_t;

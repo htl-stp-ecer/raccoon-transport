@@ -176,6 +176,91 @@ namespace
         cleanup(kCh);
     }
 
+
+    // Header offsets in the ring file (see ring_hdr_t): producer_seq at 32, claim_seq at 176.
+    void pokeU64(const char* ch, long offset, uint64_t value)
+    {
+        char path[512]{};
+        rrb_channel_to_path(ch, path, sizeof(path));
+        FILE* fp = fopen(path, "r+b");
+        require(fp != nullptr, "open ring file");
+        fseek(fp, offset, SEEK_SET);
+        require(fwrite(&value, 8, 1, fp) == 1, "poke");
+        fclose(fp);
+    }
+
+    std::multiset<uint64_t> readFor(rrb_reader_t* r, int ms)
+    {
+        std::multiset<uint64_t> got;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            drain(r, got);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return got;
+    }
+
+    // 5. The state found on a robot: producer_seq was left far above the tickets
+    //    (754 vs 153), so no new ticket ever raised it and readers saw nothing new.
+    void testStaleHighProducerSeqIsHealed()
+    {
+        cleanup(kCh);
+        rrb_writer_t* w = rrb_writer_create_multi(kCh, 64, 2048);
+        require(w != nullptr, "create");
+        for (uint32_t n = 0; n < 3; ++n)
+        {
+            Frame f{1, n};
+            require(rrb_writer_publish(w, &f, sizeof(f)) == 0, "publish");
+        }
+        pokeU64(kCh, 32, 754);  // something else pushed producer_seq above claim_seq
+
+        rrb_reader_t* r = rrb_reader_open(kCh);  // a reader that attaches now, like a new program
+        for (uint32_t n = 100; n < 110; ++n)
+        {
+            Frame f{2, n};
+            require(rrb_writer_publish(w, &f, sizeof(f)) == 0, "publish after");
+        }
+        auto got = readFor(r, 500);
+        for (uint32_t n = 100; n < 110; ++n)
+            require(got.count((uint64_t(2) << 32) | n) == 1,
+                    "frame " + std::to_string(n) + " is invisible behind a stale producer_seq");
+        rrb_reader_close(r);
+        rrb_writer_destroy(w);
+        cleanup(kCh);
+    }
+
+    // 6. A ring reset in place by a single-producer writer (producer_seq back to 0,
+    //    claim_seq and flag untouched) must not make readers wait for tickets that
+    //    will never be written.
+    void testRingResetByOldWriterDoesNotStallReaders()
+    {
+        cleanup(kCh);
+        rrb_writer_t* w = rrb_writer_create_multi(kCh, 64, 2048);
+        require(w != nullptr, "create");
+        for (uint32_t n = 0; n < 150; ++n)
+        {
+            Frame f{1, n};
+            require(rrb_writer_publish(w, &f, sizeof(f)) == 0, "publish");
+        }
+        rrb_writer_t* old = rrb_writer_create(kCh, 64, 2048);  // what an old process does at start
+        require(old != nullptr, "legacy create");
+        rrb_reader_t* r = rrb_reader_open(kCh);
+        for (uint32_t n = 200; n < 205; ++n)
+        {
+            Frame f{2, n};
+            require(rrb_writer_publish(w, &f, sizeof(f)) == 0, "publish after reset");
+        }
+        auto got = readFor(r, 500);
+        for (uint32_t n = 200; n < 205; ++n)
+            require(got.count((uint64_t(2) << 32) | n) == 1,
+                    "frame " + std::to_string(n) + " did not arrive within 500 ms after a reset");
+        rrb_reader_close(r);
+        rrb_writer_destroy(old);
+        rrb_writer_destroy(w);
+        cleanup(kCh);
+    }
+
     // 4. The real topology: one publisher, several subscriber processes (each a
     //    separate ACK writer), lots of reliable commands. Nothing may need a
     //    retransmit and nothing may be given up on.
@@ -243,6 +328,8 @@ int main()
     failed += run("concurrent_writers", testConcurrentWriters);
     failed += run("late_writer_does_not_wipe", testLateWriterDoesNotWipe);
     failed += run("dead_writer_does_not_wedge", testDeadWriterDoesNotWedge);
+    failed += run("stale_high_producer_seq_is_healed", testStaleHighProducerSeqIsHealed);
+    failed += run("ring_reset_by_old_writer_does_not_stall_readers", testRingResetByOldWriterDoesNotStallReaders);
     failed += run("many_ackers_one_publisher", testManyAckersOnePublisher);
     return failed ? 1 : 0;
 }
