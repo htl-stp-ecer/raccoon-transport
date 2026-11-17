@@ -4,15 +4,15 @@
 
 # raccoon-transport
 
-**The shared message and transport layer for RaccoonOS — LCM messaging across C++, Python, and Dart.**
+**The shared message and transport layer for RaccoonOS — shared-memory messaging across C++, Python, and Dart.**
 
-[![CI](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/htl-stp-ecer/raccoon-transport)](https://github.com/htl-stp-ecer/raccoon-transport/releases/latest)
-[![PyPI](https://img.shields.io/pypi/v/raccoon-transport?logo=pypi&logoColor=white)](https://pypi.org/project/raccoon-transport/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 ![C++20](https://img.shields.io/badge/C%2B%2B20-00599C?logo=cplusplus&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=ffdd54)
 ![Dart](https://img.shields.io/badge/Dart-02569B?logo=dart&logoColor=white)
+[![CI](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-transport/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/htl-stp-ecer/raccoon-transport)](https://github.com/htl-stp-ecer/raccoon-transport/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/raccoon-transport?logo=pypi&logoColor=white)](https://pypi.org/project/raccoon-transport/)
 
 > 📖 **Full documentation at [raccoon-docs.pages.dev](https://raccoon-docs.pages.dev/)**
 
@@ -22,10 +22,11 @@
 
 `raccoon-transport` is the message and transport layer shared across the robotics stack. It combines four concerns in one repo:
 
-- the authoritative C++-side `.lcm` message definitions under `messages/`
-- a C++ transport wrapper around LCM with retain and reliable-delivery support
-- a thin Python transport package plus generated Python message types
-- a Dart package that includes its own LCM runtime, parser, generator, and generated message set
+- the message definitions, written by hand in C++ under `messages/`
+- a C++ transport library with retain and reliable-delivery support
+- a Python transport package with matching message classes
+- a Dart package with its own transport and matching message classes
+- a contract hash that lets every component check at startup that it speaks the same wire format
 
 This package is best treated as a small monorepo rather than a single library.
 
@@ -35,12 +36,15 @@ This package is best treated as a small monorepo rather than a single library.
 
 ```text
 raccoon-transport/
-├── messages/            # Source .lcm files used by the C++ build
-├── cpp/                 # C++ transport library and interop tools
-├── python/              # Python package and pre-generated message classes
-├── dart/                # Dart transport package, parser, generator, generated messages
+├── messages/            # Message structs (C++ is the source of truth) and protocol types
+├── cpp/                 # C++ transport library, channels, ring bridge, tests
+├── python/              # Python package and message classes
+├── dart/                # Dart transport package and message classes
+├── contract/            # Contract hash, startup-check spec and test vectors
+├── scripts/             # contract.py (hash generator and check)
 ├── integration_tests/   # Cross-language compatibility and stress tests
-└── shared/              # Shared channel definitions
+├── build.py             # Builds the Python wheel and contract assets in Docker
+└── deploy.py            # Installs a local build on a Pi
 ```
 
 ---
@@ -118,7 +122,6 @@ cmake --build . -j$(nproc)
 ```bash
 cd dart
 dart pub get
-dart run build_runner build --delete-conflicting-outputs
 ```
 
 ### Python (editable install)
@@ -127,17 +130,20 @@ dart run build_runner build --delete-conflicting-outputs
 pip install -e python/
 ```
 
-### Regenerate Python LCM types
+### Contract hash
+
+After changing a message struct, a channel or the ring layout:
 
 ```bash
-./scripts/generate-python-types.sh
+python3 scripts/contract.py --write   # regenerate contract.json and the constants for C++, Python and Dart
+python3 scripts/contract.py --check   # fails if a generated file is stale or the languages drifted apart (also runs in CI)
 ```
 
 ---
 
 ## Integration Tests
 
-32 tests covering all 6 directional language pairs (Python, Dart, C++):
+Cross-language tests between Python, Dart and C++:
 
 ```bash
 PYTHONPATH=. pytest integration_tests/ -v
@@ -154,7 +160,7 @@ PYTHONPATH=. pytest integration_tests/test_stress.py -v
 
 ### Transport Layer
 
-- **Plain publish/subscribe** — direct LCM call, zero overhead
+- **Plain publish/subscribe** — one file per channel under `/dev/shm/` (`raccoon_ring`, a single-producer multi-consumer ring buffer), no daemon
 - **Reliable delivery** — at-least-once with acknowledgement protocol via `__raccoon/` control channels
 - **Retain** — latest-value-on-subscribe, so new subscribers immediately get the most recent message
 
@@ -164,36 +170,27 @@ All channels follow the pattern `raccoon/<device>/<property>`. Protocol channels
 
 ### Message Types
 
-Defined in `messages/types/*.lcm` under the `raccoon` package:
+Defined in `messages/types/` under the `raccoon` namespace. The wire format is written by hand in each language, and C++ is the source of truth.
 
 | Type | Description |
 |:-----|:------------|
+| `scalar_f_t`, `scalar_i32_t`, `scalar_i8_t` | Float / 32-bit / 8-bit integer scalar |
 | `vector3f_t` | 3D float vector (gyro, accel, mag) |
 | `quaternion_t` | Orientation quaternion |
-| `scalar_f_t` | Float scalar |
-| `scalar_i32_t` | 32-bit integer scalar |
-| `scalar_i8_t` | 8-bit integer scalar |
+| `orientation_matrix_t` | 3×3 orientation matrix |
 | `string_t` | String message |
-| `yolo_frame_t` | Camera frame with detection data |
-| `yolo_box_t` | Single detection bounding box |
+| `kinematics_config_t` | Kinematics matrices and motor calibration |
+| `screen_render_t`, `screen_render_answer_t` | Screen request from the robot and the answer from botui |
+| `cam_frame_t`, `cam_detections_t`, `cam_blob_t` | Camera frame and detections (raccoon-cam) |
+| `cam_config_t`, `cam_stream_ctl_t` | Camera config and stream on/off |
+| `yolo_frame_t`, `yolo_box_t` | Frame with YOLO boxes (`raccoon/yolo/frame`) |
+| `ack_t`, `envelope_t`, `retain_request_t` | Protocol types for reliable delivery and retain |
 
 ### Language-Specific Notes
 
-- **C++**: Messages auto-generated from `messages/`. Transport uses PIMPL pattern.
-- **Dart**: Keeps its own local `.lcm` copies under `dart/lib/messages/`. Includes a full LCM parser and Dart code generator. Run `build_runner` after editing `.lcm` files.
-- **Python**: Pre-generated types in `python/raccoon_transport/types/`. Regenerate with `./scripts/generate-python-types.sh`.
-
----
-
-## Part of RaccoonOS
-
-| Repository | What it is |
-|:-----------|:-----------|
-| [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib) | Core robotics library — PID, kinematics, step-based missions |
-| [stm32-data-reader](https://github.com/htl-stp-ecer/stm32-data-reader) | Raspberry Pi ↔ STM32 SPI bridge |
-| [raccoon-cli](https://github.com/htl-stp-ecer/raccoon-cli) | Dev toolchain — scaffolding, codegen, remote sync |
-| [botui](https://github.com/htl-stp-ecer/botui) | Flutter desktop environment |
-| [documentation](https://raccoon-docs.pages.dev/) | Full platform docs |
+- **C++**: Message structs live in `messages/`, the transport library in `cpp/`. Transport uses the PIMPL pattern.
+- **Dart**: Has its own transport and message classes under `dart/lib/`. No code generation step.
+- **Python**: Message classes in `python/raccoon_transport/types/raccoon/`, transport in `python/raccoon_transport/`.
 
 ---
 
