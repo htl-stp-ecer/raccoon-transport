@@ -151,7 +151,7 @@ class AggregateTests(unittest.TestCase):
         self.assertFalse(summary["ok"])
         self.assertEqual("file-missing", summary["bundle"]["error"])
 
-    bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa", "components": {"raccoon-transport": "v9", **json.loads(VERSIONS)}})
+    bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa", "components": {**json.loads(VERSIONS), "raccoon-transport": "v9"}})
 
     def test_all_ok(self):
         self.status("raccoon-cli", "aaaa", True)
@@ -192,6 +192,7 @@ class AggregateTests(unittest.TestCase):
         self.assertTrue(summary["ok"])  # dev mode never blocks
 
     def test_components_with_a_dev_component_check_are_listed(self):
+        self.bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa", "components": {**json.loads(VERSIONS), "a": "dev"}})
         dev = cc.ComponentCheck(name="version", result="dev-warnung", message="omitted", reason="version-omitted")
         self.status("a", "aaaa", True, component_check=dev)
         self.status("b", "aaaa", True)
@@ -201,6 +202,7 @@ class AggregateTests(unittest.TestCase):
         self.assertTrue(summary["ok"])
 
     def test_a_refusing_component_check_blocks_runs_and_is_named(self):
+        self.bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa", "components": {**json.loads(VERSIONS), "a": "v2"}})
         bad = cc.ComponentCheck(name="version", result="version-mismatch", message="component version mismatch: a ...")
         self.status("a", "aaaa", True, component_check=bad)
         summary = self.agg()
@@ -208,6 +210,39 @@ class AggregateTests(unittest.TestCase):
         self.assertEqual(["a"], summary["blocking"])
         self.assertIn("component version mismatch", cc.refusal_message(summary))
         self.assertEqual("version", summary["components"][0]["component_check"]["name"])
+
+    # The status file says what a component is; the result is decided again against the bundle as it is now.
+
+    def test_recorded_mismatch_is_cleared_when_the_bundle_turns_dev(self):
+        self.status("botui", "bbbb", True)  # started against "aaaa": recorded as mismatch
+        self.assertFalse(self.agg()["ok"])
+        self.bundle.write_text(json.dumps({"bundle": "b", "contract_hash": "dev", "components": json.loads(VERSIONS)}))
+        summary = self.agg()
+        self.assertTrue(summary["ok"])
+        self.assertEqual("dev-warnung", summary["components"][0]["result"])
+        self.assertEqual("mismatch", summary["components"][0]["startup_result"])
+
+    def test_recorded_ok_is_refused_when_the_bundle_hash_changes(self):
+        self.status("botui", "aaaa", True)
+        self.assertTrue(self.agg()["ok"])
+        self.bundle.write_text(json.dumps({"bundle": "c", "contract_hash": "cccc", "components": json.loads(VERSIONS)}))
+        summary = self.agg()
+        self.assertFalse(summary["ok"])
+        self.assertEqual(["botui"], summary["blocking"])
+
+    def test_recorded_version_mismatch_is_cleared_when_the_bundle_is_updated(self):
+        self.bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa", "components": {**json.loads(VERSIONS), "a": "v2"}})
+        bad = cc.ComponentCheck(name="version", result="version-mismatch", message="component version mismatch: a ...")
+        self.status("a", "aaaa", True, component_check=bad)
+        self.assertFalse(self.agg()["ok"])
+        self.bundle.write_text(json.dumps({"bundle": "b", "contract_hash": "aaaa", "components": {**json.loads(VERSIONS), "a": "v1"}}))
+        self.assertTrue(self.agg()["ok"])
+
+    def test_server_status_is_compared_with_the_raccoon_cli_entry(self):
+        self.bundle_text = json.dumps({"bundle": "b", "contract_hash": "aaaa", "components": {**json.loads(VERSIONS), "raccoon-cli": "v1"}})
+        ok = cc.ComponentCheck(name="version", result="ok", message="version ok: v1")
+        self.status("raccoon-server", "aaaa", True, component_check=ok)
+        self.assertTrue(self.agg()["ok"])
 
     def test_dead_run_component_with_dev_entry_is_not_listed(self):
         dev = cc.ComponentCheck(name="version", result="dev-warnung", message="omitted")

@@ -126,6 +126,20 @@ Off a Raccoon device (same rule as the check: no device marker directory and not
 forced) the aggregate is simply `ok` with `on_device: false`; the Pi server must be
 usable on a laptop for development and tests.
 
+**The recorded result is never trusted.** A status file says what a component *is*
+(`own_hash`, `component_version`, `own_transport_version`, `component_check.name`); the result is
+a comparison of that with the bundle, and the bundle can change after the component started
+(`contract_hash` set to `dev`, an update, a reflash). So the aggregate decides every file's result
+again, on every call, against the bundle as it is now: the transport decision above with the file's
+`own_hash`, and, for a component check named `version`, the component version check of
+`COMPONENT_VERSION_CHECK.md` with the file's `component_version` (the Pi server's entry is
+`raccoon-cli`, every other component's entry is its own name). Component checks of another name
+cannot be redone and keep what the component handed over. The reported `result`, `reason`,
+`message`, `expected_hash` and `component_check` are the fresh ones; the recorded result stays as
+`startup_result`. A file without `own_hash` is reported as it is. Nobody has to restart to make
+a changed bundle count. If the bundle file itself is the problem, the aggregate blocks on `bundle`
+as before.
+
 The aggregate answers three things: the expected hash and transport version
 from the bundle file, whether dev mode is on, and the list of components with
 result and activity. A run is refused when a component with a refusing result (`mismatch`,

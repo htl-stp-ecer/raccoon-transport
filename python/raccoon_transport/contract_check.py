@@ -357,6 +357,98 @@ def on_device(device_marker: Optional[str] = None, force: Optional[bool] = None)
     return bool(force) or Path(device_marker).is_dir()
 
 
+# Status file component name -> key in the bundle's ``components`` map, where they differ.
+_BUNDLE_KEY = {"raccoon-server": "raccoon-cli"}
+
+
+def _normalize_version(value: str) -> str:
+    text = value.strip()
+    return text[1:] if text[:1] in ("v", "V") else text
+
+
+def _version_check(component: str, version: str, key: str, bundle: dict[str, Any], bundle_file: str) -> ComponentCheck:
+    """Component version check of ``contract/COMPONENT_VERSION_CHECK.md``, run against the bundle as it is now."""
+    components = bundle.get("components")
+    entry = components.get(key) if isinstance(components, dict) else None
+    if not isinstance(entry, str):
+        return ComponentCheck(
+            "version", BUNDLE_ERROR,
+            f"bundle check failed: bundle file has no version for {key}: {bundle_file}", "version-field-missing",
+        )
+    expected = entry.strip()
+    if not expected:
+        return ComponentCheck(
+            "version", BUNDLE_ERROR,
+            f"bundle check failed: bundle file has an empty version for {key}: {bundle_file}", "version-field-empty",
+        )
+    if expected == "dev":
+        return ComponentCheck(
+            "version", DEV_WARNING,
+            f"component version check omitted ('{key}' is 'dev' in the bundle): {component} {version} is not "
+            "compared; mismatches are not enforced",
+            "version-omitted", expected,
+        )
+    if _normalize_version(version) != _normalize_version(expected):
+        name = bundle.get("bundle") if isinstance(bundle.get("bundle"), str) else "unknown"
+        return ComponentCheck(
+            "version", "version-mismatch",
+            f"component version mismatch: {component} is {version} but bundle {name} expects {expected}; "
+            "update or reflash so all components match",
+            None, expected,
+        )
+    return ComponentCheck("version", OK, f"version ok: {version}", None, expected)
+
+
+def _reevaluate(
+    document: dict[str, Any], bundle_file: str, device_marker: Optional[str], force: Optional[bool]
+) -> dict[str, Any]:
+    """Decide a status file's result again against the bundle as it is *now*.
+
+    A status file is what the component *is* (its own hash, its own version); the
+    result is a comparison of that with the bundle, and the bundle can change after
+    the component started (``contract_hash`` set to ``dev``, an update). So the
+    recorded result is never trusted: the file's identity is run through the same
+    decision as at startup. The recorded result stays visible as ``startup_result``.
+    A file without the identity fields is left as it is.
+    """
+    own_hash = document.get("own_hash")
+    component = document.get("component")
+    if not (isinstance(own_hash, str) and isinstance(component, str)):
+        return document
+    version = document.get("component_version")
+    version = version if isinstance(version, str) else ""
+    recorded = document.get("component_check")
+    component_check: Optional[ComponentCheck] = None
+    if isinstance(recorded, dict) and recorded.get("name") == "version":
+        try:
+            bundle = json.loads(Path(bundle_file).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            bundle = None
+        if isinstance(bundle, dict):
+            key = _BUNDLE_KEY.get(component, component)
+            component_check = _version_check(component, version, key, bundle, bundle_file)
+    elif isinstance(recorded, dict) and isinstance(recorded.get("result"), str):
+        # A check of some other kind: the transport cannot redo it, keep what it handed over.
+        component_check = ComponentCheck(
+            str(recorded.get("name") or ""), recorded["result"], str(recorded.get("message") or ""),
+            recorded.get("reason"), recorded.get("expected"),
+        )
+    fresh = check(
+        component, version, component_check=component_check, own_hash=own_hash,
+        own_version=document.get("own_transport_version"), bundle_file=bundle_file,
+        device_marker=device_marker, force=True if force is None else force,
+    )
+    updated = dict(document)
+    updated["startup_result"] = document.get("result")
+    updated.update(
+        result=fresh.result, reason=fresh.reason, message=fresh.message, bundle=fresh.bundle,
+        expected_hash=fresh.expected_hash, expected_transport_version=fresh.expected_transport_version,
+    )
+    if component_check is not None:
+        updated["component_check"] = asdict(component_check)
+    return updated
+
+
 def aggregate(
     *,
     bundle_file: Optional[str] = None,
@@ -402,7 +494,10 @@ def aggregate(
     elif bundle["error"] is None and not expected:
         bundle["error"] = "field-empty"
 
-    statuses = read_statuses(directory)
+    statuses = [
+        _reevaluate(s, bundle_file, device_marker, force) if bundle["error"] is None else s
+        for s in read_statuses(directory)
+    ]
     dev_mode = expected == "dev"
     blocking = [
         s["component"]
