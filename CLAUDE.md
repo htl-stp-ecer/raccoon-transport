@@ -35,6 +35,14 @@ and Dart (`dart/lib/src/contract.dart`). Every binary also carries the string
 
 ## Build Commands
 
+### Wheel and contract assets (Docker)
+```bash
+python3 build.py                  # contract check + wheel + contract assets -> builds/, version 0.0
+python3 build.py --version 71     # release build (what CI does)
+python3 deploy.py --host <pi>     # install builds/ wheel on the Pi, sets raccoon-transport to "dev" in its bundle file
+```
+Only `build.py` and `deploy.py` build and install the wheel; CI runs `build.py` too. `deploy.py` is for local builds; releases are installed by `raccoon update`. C++ and Dart are used as source (submodule) and tested in CI. Do not remove `cpp/bridge/build.sh`: botui and stm32-data-reader build their ring bridge with it.
+
 ### C++ (via CMake):
 ```bash
 mkdir -p build && cd build

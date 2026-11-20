@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -243,6 +244,74 @@ namespace
         rrb_writer_destroy(writer);
     }
 
+    // A reader parked in a futex wait (a long-running service) must be woken by the first
+    // publish of a restarted writer. Re-creating the writer used to reset waiter_count to 0,
+    // so the publisher skipped FUTEX_WAKE and the reader only woke when its own timeout ran
+    // out: every command to such a service arrived up to a second late.
+    void testParkedReaderWakesAfterProducerRestart()
+    {
+        const std::string channel = "raccoon/test/parked_wake";
+        ChannelCleanup cleanup(channel);
+
+        rrb_writer_t* writer = rrb_writer_create(channel.c_str(), 64, 256);
+        require(writer != nullptr, "failed to create writer");
+        for (int i = 0; i < 3; ++i)
+        {
+            require(rrb_writer_publish(writer, "x", 1) == 0, "publish");
+        }
+        rrb_writer_destroy(writer);
+
+        rrb_reader_t* reader = rrb_reader_open(channel.c_str());
+        require(reader != nullptr, "failed to open reader");
+        char buffer[16];
+        size_t length = 0;
+        while (rrb_reader_recv(reader, buffer, sizeof(buffer), &length) == 0)
+        {
+        }
+
+        std::atomic<bool> got{false};
+        std::atomic<long long> got_after_us{0};
+        const auto parked_at = std::chrono::steady_clock::now();
+        std::thread parked([&] {
+            char buf[16];
+            size_t len = 0;
+            // Parks for up to 2 s; a correct wake comes within milliseconds.
+            while (!got.load())
+            {
+                if (rrb_reader_recv_wait(reader, buf, sizeof(buf), &len, 2'000'000) == 0)
+                {
+                    got_after_us.store(std::chrono::duration_cast<std::chrono::microseconds>(
+                                           std::chrono::steady_clock::now() - parked_at).count());
+                    got.store(true);
+                }
+            }
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));  // the reader is parked now
+        const auto restarted_at = std::chrono::steady_clock::now();
+        writer = rrb_writer_create(channel.c_str(), 64, 256);  // a new program starts
+        require(writer != nullptr, "failed to recreate writer");
+        require(rrb_writer_publish(writer, "y", 1) == 0, "publish after restart");
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        while (!got.load() && std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const auto woke_after = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::microseconds(got_after_us.load()) -
+            std::chrono::duration_cast<std::chrono::microseconds>(restarted_at - parked_at));
+        got.store(true);
+        parked.join();
+        rrb_reader_close(reader);
+        rrb_writer_destroy(writer);
+
+        require(got_after_us.load() > 0, "the parked reader never saw the frame");
+        require(woke_after.count() < 250,
+                "the parked reader was woken " + std::to_string(woke_after.count()) +
+                    " ms after the restarted writer published (it only woke at its own timeout)");
+    }
+
     void runTest(const char* name, const std::function<void()>& fn)
     {
         try
@@ -264,6 +333,7 @@ int main(int argc, char** argv)
         {"test_producer_restart", testProducerRestart},
         {"test_producer_restart_after_lapped", testProducerRestartAfterLapped},
         {"test_subscriber_before_producer", testSubscriberBeforeProducer},
+        {"test_parked_reader_wakes_after_producer_restart", testParkedReaderWakesAfterProducerRestart},
     };
 
     if (argc > 1)
