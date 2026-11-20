@@ -2,7 +2,7 @@
 
 /// Contract hash of this raccoon-transport. Equal hash means equal message
 /// layouts, channel names and ring layout.
-const String raccoonContractHash = '7929ef7ce9798a35';
+const String raccoonContractHash = '615e93d0ec3c5cf2';
 
 /// Marker string a build scan can search for in a compiled binary.
-const String raccoonContractMarker = 'RACCOON_CONTRACT_V1=7929ef7ce9798a35';
+const String raccoonContractMarker = 'RACCOON_CONTRACT_V1=615e93d0ec3c5cf2';
