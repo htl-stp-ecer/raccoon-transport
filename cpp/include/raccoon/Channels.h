@@ -126,6 +126,38 @@ namespace raccoon::Channels
         RACCOON_CACHED_CHANNEL("raccoon/servo/", "/smooth_cmd");
     }
 
+    // Bus servos (Feetech STS, e.g. STS3215, port in servo mode 3) — the
+    // position_cmd / smooth_cmd channels above drive them too; these add
+    // what only a bus servo can do.
+
+    // Continuous rotation ("infinite" servo): scalar_f_t, signed deg/s.
+    inline const std::string& servoVelocityCommand(const PortId port)
+    {
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/velocity_cmd");
+    }
+
+    // scalar_i32_t: 0 = latest command still running, 1 = reached the goal,
+    // 2 = stopped short of the goal (blocked / overloaded). Use it to block
+    // until a position or smooth command has finished.
+    inline const std::string& servoDone(const PortId port)
+    {
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/done");
+    }
+
+    // vector3f_t: x = measured position in degrees (multi-turn, continuous),
+    // y = speed in deg/s, z = load in percent of max torque (signed).
+    inline const std::string& servoFeedback(const PortId port)
+    {
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/feedback");
+    }
+
+    // vector3f_t: x = supply voltage in V, y = temperature in deg C,
+    // z = servo error bits (0x20 overload, 0x04 overheat, 0x01 voltage), -1 = not connected.
+    inline const std::string& servoHealth(const PortId port)
+    {
+        RACCOON_CACHED_CHANNEL("raccoon/servo/", "/health");
+    }
+
     inline const std::string& backEmf(const PortId port)
     {
         RACCOON_CACHED_CHANNEL("raccoon/bemf/", "/value");

@@ -39,6 +39,11 @@ class Channels {
   static String servoPosition(int port) => 'raccoon/servo/$port/position';
   static String servoPositionCommand(int port) => 'raccoon/servo/$port/position_cmd';
   static String servoSmoothPositionCommand(int port) => 'raccoon/servo/$port/smooth_cmd';
+  // Bus servos (Feetech STS, servo mode 3)
+  static String servoVelocityCommand(int port) => 'raccoon/servo/$port/velocity_cmd';
+  static String servoDone(int port) => 'raccoon/servo/$port/done';
+  static String servoFeedback(int port) => 'raccoon/servo/$port/feedback';
+  static String servoHealth(int port) => 'raccoon/servo/$port/health';
   static String backEmf(int port) => 'raccoon/bemf/$port/value';
   static String analog(int port) => 'raccoon/analog/$port/value';
   static String digital(int bit) => 'raccoon/digital/$bit/value';
