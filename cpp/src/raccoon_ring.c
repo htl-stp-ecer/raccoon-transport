@@ -89,6 +89,10 @@ struct rrb_futex_waitv {
     uint32_t __reserved;
 };
 
+// Set once the kernel reports ENOSYS for futex_waitv; multi-channel waits then
+// poll instead of parking (see rrb_reader_recv_wait_many_with_control).
+static _Atomic int g_waitv_unsupported = 0;
+
 // Returns the kernel's "which entry woke me" index on a wake, -1 with
 // errno=ETIMEDOUT on timeout, -1 with errno otherwise.
 static int futex_waitv_until(struct rrb_futex_waitv* waiters, size_t n,
@@ -165,6 +169,17 @@ static size_t file_size_for(uint32_t slot_count, uint32_t max_payload) {
     return sizeof(ring_hdr_t) + (size_t)slot_count * slot_stride(max_payload);
 }
 
+// A ring geometry is usable when it is self-consistent and the file holds every
+// slot it describes. Readers check this before they index into the mapping:
+// a header that claims more slots than the file has would make the first slot
+// access hit a page beyond the end of the file (SIGBUS).
+static int geometry_fits(uint32_t slot_count, uint32_t slot_size,
+                         uint32_t max_payload, size_t file_bytes) {
+    if (slot_count == 0 || max_payload == 0) return 0;
+    if (slot_size != (uint32_t)slot_stride(max_payload)) return 0;
+    return file_bytes >= file_size_for(slot_count, max_payload);
+}
+
 // ---- Path encoding -----------------------------------------------------
 
 // raccoon channel names contain slashes ("raccoon/accel/value"). /dev/shm
@@ -235,14 +250,16 @@ static int shm_open_mmap(const char* path,
     if (create) {
         struct stat st;
         if (fstat(fd, &st) != 0) { close(fd); return -1; }
-        // Either fresh file (size 0) or stale from earlier run. Always
-        // ftruncate to our wanted size and re-initialise the header — only
-        // one producer per channel, so a stale file means whoever made it
-        // is either us or doesn't matter.
-        if ((size_t)st.st_size != want_size) {
+        // Either a fresh file (size 0) or one left by an earlier run. The header is
+        // re-initialised below. The file only ever grows: readers may have a larger
+        // ring mapped, and a page beyond a shortened end of file raises SIGBUS in
+        // them. A file that is larger than needed keeps its size.
+        if ((size_t)st.st_size < want_size) {
             if (ftruncate(fd, (off_t)want_size) != 0) {
                 close(fd); return -1;
             }
+        } else {
+            want_size = (size_t)st.st_size;
         }
     } else {
         struct stat st;
@@ -275,12 +292,15 @@ static int shm_open_mmap(const char* path,
             h->slot_count == want_slot_count &&
             h->slot_size == (uint32_t)slot_stride(want_max_payload) &&
             h->max_payload == want_max_payload;
-        h->magic       = RRB_MAGIC;
+        // Readers that attach while the header is rewritten see no magic and treat
+        // the ring as not ready; the magic is stored last.
+        __atomic_store_n(&h->magic, 0u, __ATOMIC_RELEASE);
         h->version     = RRB_VERSION;
         h->slot_count  = want_slot_count;
         h->slot_size   = (uint32_t)slot_stride(want_max_payload);
         h->max_payload = want_max_payload;
-        // (wake_seq replaced the old _reserved0 padding slot.)
+        h->flags       = 0;  // a single-producer ring
+        atomic_store_explicit(&h->claim_seq, 0, memory_order_release);
         atomic_store_explicit(&h->producer_seq, 0, memory_order_release);
         if (!same_layout) {
             atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
@@ -296,6 +316,7 @@ static int shm_open_mmap(const char* path,
             atomic_store_explicit(&s->seq, 0, memory_order_release);
             s->len = 0;
         }
+        __atomic_store_n(&h->magic, RRB_MAGIC, __ATOMIC_RELEASE);
     }
 
     *out_base = base;
@@ -382,8 +403,11 @@ rrb_writer_t* rrb_writer_create_multi(const char* channel,
     if (!w->base) {
         // Fresh file, or a stale/incompatible ring: (re-)initialise it.
         size_t want_size = file_size_for(slot_count, max_payload);
-        if ((size_t)st.st_size != want_size &&
-            ftruncate(w->fd, (off_t)want_size) != 0) goto fail;
+        if ((size_t)st.st_size < want_size) {
+            if (ftruncate(w->fd, (off_t)want_size) != 0) goto fail;
+        } else {
+            want_size = (size_t)st.st_size;  // the file never shrinks (see shm_open_mmap)
+        }
         void* base = mmap(NULL, want_size, PROT_READ | PROT_WRITE,
                           MAP_SHARED, w->fd, 0);
         if (base == MAP_FAILED) goto fail;
@@ -548,6 +572,9 @@ struct rrb_reader_s {
     ring_hdr_t* hdr;
     uint8_t*    slots;
     size_t      stride;
+    uint32_t    slot_count;  // geometry of the attached ring, read once at attach
+    uint32_t    max_payload; // (the shared header can change under us; these cannot)
+    uint64_t    too_big_seq; // seq of the frame last reported as RRB_RECV_TOO_BIG
     uint64_t    last_seen;   // last delivered producer_seq
     uint64_t    last_open_attempt_ns;  // for lazy re-attach throttling
     uint64_t    stall_seq;       // multi-producer: seq we are waiting on to be written
@@ -565,6 +592,9 @@ static void reader_detach(rrb_reader_t* r) {
     r->hdr    = NULL;
     r->slots  = NULL;
     r->stride = 0;
+    r->slot_count = 0;
+    r->max_payload = 0;
+    r->too_big_seq = 0;
     r->fd     = -1;
     r->last_seen = 0;
     r->stall_seq = 0;
@@ -596,12 +626,26 @@ static int reader_attach(rrb_reader_t* r) {
         close(fd);
         return -2;
     }
-    r->fd     = fd;
-    r->base   = base;
-    r->size   = size;
-    r->hdr    = h;
-    r->slots  = (uint8_t*)base + sizeof(ring_hdr_t);
-    r->stride = h->slot_size;
+    // Read the geometry once; a writer may rewrite the shared header at any time.
+    const uint32_t slot_count  = h->slot_count;
+    const uint32_t slot_size   = h->slot_size;
+    const uint32_t max_payload = h->max_payload;
+    if (!geometry_fits(slot_count, slot_size, max_payload, size)) {
+        // The header describes more than the file holds (or is inconsistent):
+        // a writer is mid-initialisation or the file is damaged. Not ready.
+        munmap(base, size);
+        close(fd);
+        return -2;
+    }
+    r->fd          = fd;
+    r->base        = base;
+    r->size        = size;
+    r->hdr         = h;
+    r->slots       = (uint8_t*)base + sizeof(ring_hdr_t);
+    r->stride      = slot_size;
+    r->slot_count  = slot_count;
+    r->max_payload = max_payload;
+    r->too_big_seq = 0;
     return 0;
 }
 
@@ -731,7 +775,9 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
         // can't catch this. Compare live slot_size to our cached stride and
         // re-attach on mismatch; the re-attach maps the new file size and
         // refreshes stride/slots in one go.
-        if (r->hdr && r->hdr->slot_size != r->stride) {
+        if (r->hdr && (r->hdr->slot_size != r->stride ||
+                       r->hdr->slot_count != r->slot_count ||
+                       r->hdr->max_payload != r->max_payload)) {
             reader_detach(r);
             if (reader_attach(r) != 0) return 1;
             // Producer rebuilt the ring → seq counter restarted at 0. Old
@@ -766,13 +812,13 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
         // If we're behind by more than (slot_count - 1), the producer has
         // lapped us. Jump to the oldest still-intact slot in the ring.
         uint64_t next;
-        if (producer - r->last_seen > (uint64_t)r->hdr->slot_count - 1u) {
-            next = producer - ((uint64_t)r->hdr->slot_count - 1u);
+        if (producer - r->last_seen > (uint64_t)r->slot_count - 1u) {
+            next = producer - ((uint64_t)r->slot_count - 1u);
         } else {
             next = r->last_seen + 1;
         }
 
-        uint32_t slot_idx = (uint32_t)((next - 1) % r->hdr->slot_count);
+        uint32_t slot_idx = (uint32_t)((next - 1) % r->slot_count);
         slot_hdr_t* s = (slot_hdr_t*)(r->slots + (size_t)slot_idx * r->stride);
 
         // SeqLock read: snapshot seq, copy payload, re-check seq. If it
@@ -822,15 +868,27 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
             }
             // seq_before == next — slot looks valid. Copy payload.
             uint32_t len = s->len;
-            if (len > r->hdr->max_payload) len = r->hdr->max_payload;
-            size_t copy_len = len > buf_size ? buf_size : len;
-            memcpy(buf, s->data, copy_len);
+            if (len > r->max_payload) len = r->max_payload;
+            if (len > buf_size) {
+                // Does not fit. Report the size it needs and leave the frame in
+                // place (the caller retries with a bigger buffer or skips it).
+                // Confirm first that the slot still holds the frame whose length
+                // was read.
+                if (atomic_load_explicit(&s->seq, memory_order_acquire) == next) {
+                    *out_len = len;
+                    r->too_big_seq = next;
+                    return RRB_RECV_TOO_BIG;
+                }
+                continue;  // overwritten meanwhile: look again
+            }
+            memcpy(buf, s->data, len);
 
             // Verify seq didn't change during the copy.
             uint64_t seq_after = atomic_load_explicit(&s->seq, memory_order_acquire);
             if (seq_after == next) {
-                *out_len = copy_len;
+                *out_len = len;
                 r->last_seen = next;
+                r->too_big_seq = 0;
                 return 0;
             }
             // Slot was overwritten during our copy — retry with the newer seq.
@@ -928,19 +986,19 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
         }
         for (;;) {
             size_t out_len = 0;
-            uint8_t* buf = scratch;
-            size_t buf_sz = scratch_sz;
-            if (r->hdr->max_payload > scratch_sz) {
-                if (r->hdr->max_payload > big_sz) {
-                    free(big);
-                    big_sz = r->hdr->max_payload;
-                    big = (uint8_t*)malloc(big_sz);
-                    if (!big) { delivered = -1; goto done; }
-                }
-                buf = big;
-                buf_sz = big_sz;
-            }
+            uint8_t* buf = big ? big : scratch;
+            size_t buf_sz = big ? big_sz : scratch_sz;
             int rc = rrb_reader_recv(r, buf, buf_sz, &out_len);
+            if (rc == RRB_RECV_TOO_BIG) {
+                // Grow to exactly what this frame needs, not to the ring's
+                // max_payload: a ring may be sized for frames of many MiB while
+                // its frames are a few KiB.
+                uint8_t* grown = (uint8_t*)realloc(big, out_len);
+                if (!grown) { delivered = -1; goto done; }
+                big = grown;
+                big_sz = out_len;
+                continue;
+            }
             if (rc != 0) break;
             if (cb(i, buf, out_len, user) != 0) { goto done; }
             ++delivered;
@@ -985,23 +1043,36 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
         nanosleep(&sleep_ts, NULL);
         goto done;
     }
-    // Bump waiter_count on every reader we're about to park on so
-    // writers know to FUTEX_WAKE us. Ordering matters: increment
-    // first, then re-snapshot wake_seq inside futex_waitv (already
-    // done above with memory_order_acquire). If a writer races us
-    // and publishes between our wake_seq snapshot and futex_waitv,
-    // the kernel returns EAGAIN — we re-drain in pass 3.
-    for (size_t i = 0; i < n; ++i) {
-        rrb_reader_t* r = readers[i];
-        if (!r || !r->base) continue;
-        atomic_fetch_add_explicit(&r->hdr->waiter_count, 1u,
-                                  memory_order_release);
-    }
-    (void)futex_waitv_until(waiters, nw, timeout_us);
-    for (size_t i = 0; i < n; ++i) {
-        rrb_reader_t* r = readers[i];
-        if (!r || !r->base) continue;
-        waiter_leave(&r->hdr->waiter_count);
+    if (atomic_load_explicit(&g_waitv_unsupported, memory_order_relaxed)) {
+        // The kernel has no futex_waitv (before Linux 5.16). Poll every
+        // millisecond instead of parking: wakes are late by up to 1 ms but the
+        // caller keeps receiving. A change of the control word ends the wait early.
+        const int slice_us = timeout_us < 1000 ? timeout_us : 1000;
+        if (!(control && *(volatile uint32_t*)control != control_expected)) {
+            struct timespec poll_ts = {0, (long)slice_us * 1000L};
+            nanosleep(&poll_ts, NULL);
+        }
+    } else {
+        // Bump waiter_count on every reader we're about to park on so
+        // writers know to FUTEX_WAKE us. Ordering matters: increment
+        // first, then re-snapshot wake_seq inside futex_waitv (already
+        // done above with memory_order_acquire). If a writer races us
+        // and publishes between our wake_seq snapshot and futex_waitv,
+        // the kernel returns EAGAIN — we re-drain in pass 3.
+        for (size_t i = 0; i < n; ++i) {
+            rrb_reader_t* r = readers[i];
+            if (!r || !r->base) continue;
+            atomic_fetch_add_explicit(&r->hdr->waiter_count, 1u,
+                                      memory_order_release);
+        }
+        if (futex_waitv_until(waiters, nw, timeout_us) < 0 && errno == ENOSYS) {
+            atomic_store_explicit(&g_waitv_unsupported, 1, memory_order_relaxed);
+        }
+        for (size_t i = 0; i < n; ++i) {
+            rrb_reader_t* r = readers[i];
+            if (!r || !r->base) continue;
+            waiter_leave(&r->hdr->waiter_count);
+        }
     }
 
     // Pass 3: post-wake drain. Whatever woke us probably has data; the
@@ -1017,19 +1088,19 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
         }
         for (;;) {
             size_t out_len = 0;
-            uint8_t* buf = scratch;
-            size_t buf_sz = scratch_sz;
-            if (r->hdr->max_payload > scratch_sz) {
-                if (r->hdr->max_payload > big_sz) {
-                    free(big);
-                    big_sz = r->hdr->max_payload;
-                    big = (uint8_t*)malloc(big_sz);
-                    if (!big) { delivered = -1; goto done; }
-                }
-                buf = big;
-                buf_sz = big_sz;
-            }
+            uint8_t* buf = big ? big : scratch;
+            size_t buf_sz = big ? big_sz : scratch_sz;
             int rc = rrb_reader_recv(r, buf, buf_sz, &out_len);
+            if (rc == RRB_RECV_TOO_BIG) {
+                // Grow to exactly what this frame needs, not to the ring's
+                // max_payload: a ring may be sized for frames of many MiB while
+                // its frames are a few KiB.
+                uint8_t* grown = (uint8_t*)realloc(big, out_len);
+                if (!grown) { delivered = -1; goto done; }
+                big = grown;
+                big_sz = out_len;
+                continue;
+            }
             if (rc != 0) break;
             if (cb(i, buf, out_len, user) != 0) { goto done; }
             ++delivered;
@@ -1038,6 +1109,20 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
 done:
     free(big);
     return delivered;
+}
+
+int rrb_reader_skip(rrb_reader_t* r) {
+    if (!r) return 1;
+    if (r->too_big_seq > r->last_seen) {
+        r->last_seen = r->too_big_seq;
+        r->too_big_seq = 0;
+        return 0;
+    }
+    return 1;
+}
+
+size_t rrb_reader_max_payload(const rrb_reader_t* r) {
+    return (r && r->base) ? (size_t)r->max_payload : 0;
 }
 
 void rrb_reader_close(rrb_reader_t* r) {

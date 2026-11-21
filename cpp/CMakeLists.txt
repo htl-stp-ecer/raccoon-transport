@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
-# raccoon_transport is now backed by the in-tree raccoon_ring SHM library
-# (src/raccoon_ring.c) — see the parent CMakeLists.txt comment for the
-# May 2026 rationale on removing the iceoryx2 dependency.
+# raccoon_transport is backed by the raccoon_ring shared-memory library
+# (src/raccoon_ring.c); see the parent CMakeLists.txt.
 
 add_library(raccoon_transport STATIC
     src/Transport.cpp
@@ -100,4 +99,22 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_multi_producer_ring_tests
         COMMAND raccoon_transport_multi_producer_ring_tests)
+
+    add_executable(raccoon_transport_ring_robust_tests
+        tests/test_ring_robust.cpp)
+    target_link_libraries(raccoon_transport_ring_robust_tests PRIVATE
+        raccoon_transport)
+    target_include_directories(raccoon_transport_ring_robust_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_ring_robust_tests
+        COMMAND raccoon_transport_ring_robust_tests)
+
+    add_executable(raccoon_transport_lifecycle_robust_tests
+        tests/test_lifecycle_robust.cpp)
+    target_link_libraries(raccoon_transport_lifecycle_robust_tests PRIVATE
+        raccoon_transport)
+    target_include_directories(raccoon_transport_lifecycle_robust_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_lifecycle_robust_tests
+        COMMAND raccoon_transport_lifecycle_robust_tests)
 endif()

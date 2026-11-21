@@ -61,28 +61,29 @@ namespace raccoon
         // an ACK — a genuine, unrecovered command loss worth chasing.
         uint64_t reliableRetransmits = 0;
         uint64_t reliableDropped = 0;
+        // Subscriber handlers that threw an exception. The transport keeps
+        // dispatching; see Transport::setHandlerErrorHandler().
+        uint64_t handlerErrors = 0;
         std::vector<Channel> channels{};
     };
 
     /**
-     * Typed wrapper around the shared-memory transport with optional
-     * reliable and retained delivery flags preserved for API compatibility.
+     * Typed wrapper around the shared-memory transport (one ring buffer file
+     * per channel under /dev/shm, see raccoon_ring.h) with reliable and
+     * retained delivery.
      *
      * The implementation is hidden behind a PIMPL. Public users interact
-         * through typed `publish<T>()` and `subscribe<T>()` helpers or their raw
+     * through typed `publish<T>()` and `subscribe<T>()` helpers or their raw
      * equivalents when a message type is not available at compile time.
      *
-     * Thread safety: every public method is safe to call from any thread.
-     * The implementation serializes all underlying LCM API calls with a
-     * single recursive mutex, which mirrors LCM's documented "use from one
-     * thread" constraint while still letting N writers publish concurrently
-     * (writers serialize, they don't race). `spin()` releases the mutex
-     * between iterations so concurrent publishers see at most ~10 ms of
-     * scheduling delay even when a reader thread is active on the same
-     * Transport. Subscriber callbacks temporarily release the mutex while
-     * user code runs, then reacquire it before returning to LCM. That keeps
-     * nested publish-in-callback patterns working while preventing a slow
-     * callback from blocking unrelated transport operations on other threads.
+     * Thread safety: every public method is safe to call from any thread,
+     * with one rule: call `spinOnce()` / `spin()` from a single thread. The
+     * implementation serialises access to the rings with a recursive mutex,
+     * so several threads can publish concurrently (writers serialise, they
+     * do not race). Subscriber callbacks run without the mutex held, so a
+     * callback may publish, subscribe or call `shutdown()`, and a slow
+     * callback does not block unrelated transport operations on other
+     * threads.
      */
     class Transport
     {
@@ -124,6 +125,17 @@ namespace raccoon
          * and thread-safe (a log call is fine). Pass {} to clear.
          */
         void setReliableEventHandler(ReliableEventHandler handler);
+
+        using HandlerErrorHandler = std::function<void(const std::string& channel,
+                                                       const std::string& what)>;
+        /**
+         * Register a callback for subscriber handlers that throw. The transport
+         * keeps dispatching (one faulty handler must not stop the others), counts
+         * the error in `TransportStats::handlerErrors` and prints the first few per
+         * channel to stderr. The callback runs on the thread that called
+         * `spinOnce()`, right after the handler threw. Pass {} to clear.
+         */
+        void setHandlerErrorHandler(HandlerErrorHandler handler);
 
         template <TransportMessage T>
         bool publish(const std::string& channel, const T& message,
@@ -185,7 +197,12 @@ namespace raccoon
         /** Return collected stats and clear the internal counters. */
         TransportStats getAndResetStats();
 
-        /** Handle one LCM iteration and advance reliability timers. */
+        /**
+         * Deliver the frames that are waiting, then (when `timeoutMs` > 0 and
+         * nothing was delivered) park until a frame arrives, `wakeControl()` is
+         * called or the timeout ends. Returns the number of frames delivered.
+         * With `timeoutMs == 0` the call does not block.
+         */
         int spinOnce(int timeoutMs = 0);
         /** Block and keep handling messages until `stop()` is called. */
         void spin();
@@ -205,16 +222,17 @@ namespace raccoon
         void wakeControl();
 
         /**
-         * Tear down the iceoryx2 Node and all lazy publisher/subscriber
-         * ports NOW, while the host process and iceoryx2 globals are still
-         * alive. Required to avoid a static-destruction-order SIGSEGV: the
-         * default `~Transport()` runs during C++ static teardown and can
-         * race iceoryx2's own globals (LoggerManager, ConfigManager). Call
-         * this from a Python atexit hook or your app's controlled shutdown
-         * path. After this returns the Transport is no longer alive — see
-         * `is_alive()` — and subsequent publish/subscribe calls become
-         * safe no-ops. Re-instate by replacing it with another
-         * `Transport::create()` if you actually want to keep going.
+         * Release all readers and writers and stop the reliability thread
+         * NOW, while the host process is still fully alive. Call it from a
+         * controlled shutdown path (for example a Python atexit hook) so the
+         * work does not happen during static destruction. Threads inside
+         * `spinOnce()` are woken, and `shutdown()` waits for them (at most one
+         * second) before it closes the readers. Called from inside a
+         * subscriber callback it only marks the transport as not alive; the
+         * destructor releases the resources after the spin loop has returned.
+         * After it returns the Transport is no longer alive — see
+         * `is_alive()` — and later publish and subscribe calls are safe
+         * no-ops. Replace it with another `Transport::create()` to continue.
          */
         void shutdown();
 

@@ -1,32 +1,25 @@
-// Transport.cpp — raccoon::Transport backed by the in-tree raccoon_ring
-// SHM library.
-//
-// History: this used to wrap iceoryx2 v0.9.999-dev. That backend proved
-// unreliable in our deployed setup (Pi with stm32-data-reader publishing
-// ~100 sensor channels) — every new iceoryx2 process on the host would
-// fail at NodeBuilder::create with InternalError, and even when subscribes
-// nominally succeeded, frames did not always reach the subscriber. We
-// replaced the backend with raccoon_ring: one /dev/shm file per channel,
-// single-producer multi-consumer ring with a per-slot SeqLock. Same
-// raccoon::Transport public API (publish/subscribe/spinOnce/...), no
-// caller-side changes anywhere in the codebase.
+// Transport.cpp — raccoon::Transport on top of the raccoon_ring shared-memory
+// library: one /dev/shm file per channel, a ring with one writer and any number of
+// readers, a seqlock per slot (see raccoon_ring.h).
 //
 // Threading model:
-//   * one recursive mutex guards the per-channel writer/subscriber maps
-//   * rrb_writer / rrb_reader instances themselves are NOT thread-safe;
-//     all calls happen inside the mutex
-//   * publishRaw is allowed from any thread (mutex serialises into the
-//     single-producer ring writer — fine, raccoon_ring is documented as
-//     SPMC; a serialised SPSC chain is equivalent)
-//   * subscribeRaw registers a handler; spinOnce polls each subscriber's
-//     ring under the mutex, releases the mutex around each handler call
-//     so a slow handler does not block unrelated transport ops
+//   * one recursive mutex (apiMutex) guards the per-channel writer and subscriber
+//     maps and the handler lists
+//   * rrb_writer / rrb_reader instances are NOT thread-safe; every use goes through
+//     apiMutex, except the multi-channel wait in spinOnce(), which is why one thread
+//     calls spinOnce()
+//   * publishRaw may be called from any thread (the mutex serialises the writers)
+//   * subscribeRaw registers a handler; spinOnce polls each subscriber's ring,
+//     releases the mutex around each handler call so a slow handler does not block
+//     unrelated transport operations, and copies the handler list under the mutex
+//   * shutdown() wakes spinOnce() callers on other threads and waits for them (at
+//     most kShutdownSpinWaitMs) before it closes the readers; stop() only clears
+//     the running flag and the destructor releases the resources
 //
-// Latency stats are computed from the LCM message timestamp where present.
-// raccoon_ring delivers raw bytes; we sniff the first 8 bytes as a big-
-// endian int64 microseconds-since-epoch, matching every raccoon LCM type's
-// `timestamp` field layout. If the message is shorter than 8 bytes we
-// just don't record latency for it.
+// Latency stats are computed from the message timestamp where present. raccoon_ring
+// delivers raw bytes; the first 8 bytes are read as a big-endian int64
+// microseconds-since-epoch, which is the layout of the `timestamp` field that every
+// raccoon message starts with. A message shorter than 8 bytes records no latency.
 
 #include "raccoon/Transport.h"
 
@@ -56,9 +49,8 @@
 #include <unordered_map>
 #include <vector>
 
-// The legacy reliable/retry/retain flags are kept on PublishOptions and
-// SubscribeOptions for API compatibility but the SHM backend ignores them.
-// Suppress the deprecation warning on our own pass-through reads.
+// PublishOptions and SubscribeOptions carry some fields that are marked
+// deprecated for other callers; this file reads them on purpose.
 #if defined(__GNUC__) || defined(__clang__)
 #  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
@@ -72,6 +64,17 @@ namespace raccoon
         // re-sends un-acked commands. Finer than the default 50 ms retry
         // interval so retries fire close to schedule.
         constexpr int kReliabilityTickMs = 5;
+        // How long shutdown() waits for spinOnce() calls on other threads to
+        // return before it gives up closing the readers they may still use.
+        constexpr int kShutdownSpinWaitMs = 1000;
+        // Reported on stderr per channel; later ones are only counted.
+        constexpr uint64_t kHandlerErrorsLogged = 3;
+        // Initial receive buffer per subscriber; it grows to the ring's payload size.
+        constexpr size_t kInitialScratchBytes = 16 * 1024;
+
+        // Depth of spinOnce() calls on this thread, so shutdown() called from a
+        // handler does not wait for (and free state under) the spin it runs in.
+        thread_local int tlsSpinDepth = 0;
     }
 
     class Transport::Impl
@@ -81,6 +84,11 @@ namespace raccoon
         // before the destructor (the Python atexit path needs this) and
         // subsequent publishes become safe no-ops.
         std::atomic<bool> running{true};
+        // Set by the first shutdown() that releases the resources; stop() only
+        // clears `running`, so the destructor still has something to clean up.
+        std::atomic<bool> cleanedUp{false};
+        // spinOnce() calls currently inside the transport (any thread).
+        std::atomic<int> activeSpins{0};
 
         struct PubEntry
         {
@@ -124,7 +132,7 @@ namespace raccoon
         // Surfaced via getAndResetStats().publishesDeduplicated.
         std::atomic<uint64_t> dedupCount{0};
 
-        // ---- Stats (mostly unchanged from the iceoryx2 version) -------
+        // ---- Stats --------------------------------------------------------
         struct ChannelStatsAccumulator
         {
             uint64_t deliveries{0};
@@ -168,14 +176,56 @@ namespace raccoon
 
         ~Impl() { shutdown(); }
 
+        // Bump the control word and wake a thread parked in spinOnce().
+        void wake()
+        {
+            std::atomic_fetch_add_explicit(&controlSeq, uint32_t{1},
+                                           std::memory_order_release);
+            syscall(SYS_futex, &controlSeq, FUTEX_WAKE, INT_MAX,
+                    nullptr, nullptr, 0);
+        }
+
+        // Release everything. Safe to call repeatedly, after stop(), and from the
+        // destructor. Called from inside a handler (on a spin thread) it only
+        // marks the transport dead; the destructor releases the resources once
+        // the spin loop has unwound.
         void shutdown()
         {
-            if (!running.exchange(false)) return;
+            running.store(false);
+            if (tlsSpinDepth > 0) { wake(); return; }
+            if (cleanedUp.exchange(true)) return;
+
+            // Let spinOnce() calls on other threads leave before their readers are
+            // closed. They notice `running == false` after the wake. The wait is
+            // bounded: a handler that needs a lock this thread holds (a host with
+            // a global interpreter lock, say) must not hang the shutdown. In that
+            // case the readers are leaked on purpose instead of freed under it.
+            bool spinsLeft = false;
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(kShutdownSpinWaitMs);
+            while (activeSpins.load() > 0)
+            {
+                wake();
+                if (std::chrono::steady_clock::now() >= deadline)
+                {
+                    spinsLeft = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (spinsLeft)
+            {
+                std::cerr << "raccoon::Transport: shutdown() gave up waiting for a "
+                             "spinOnce() call to return; its readers stay open until "
+                             "the process ends\n";
+            }
+
             // Stop the reliability thread BEFORE taking apiMutex: the thread
             // grabs apiMutex on every tick, so joining while holding it would
             // deadlock.
             reliableThreadRun.store(false);
             if (reliableThread.joinable()) reliableThread.join();
+            if (spinsLeft) return;
             std::lock_guard<std::recursive_mutex> lk(apiMutex);
             if (ackReader) { rrb_reader_close(ackReader); ackReader = nullptr; }
             for (auto& [ch, pe] : publishers)
@@ -298,6 +348,12 @@ namespace raccoon
             {
                 size_t out = 0;
                 int rc = rrb_reader_recv(ackReader, buf, sizeof(buf), &out);
+                if (rc == RRB_RECV_TOO_BIG)
+                {
+                    // An ACK is a few dozen bytes; anything bigger is not one.
+                    rrb_reader_skip(ackReader);
+                    continue;
+                }
                 if (rc != 0) break;  // 1 = no data, -1 = error
                 ack_t ack{};
                 if (ack.decode(buf, static_cast<int>(out)) < 0) continue;
@@ -511,20 +567,19 @@ namespace raccoon
             auto entry = std::make_unique<SubEntry>();
             entry->channel = channel;
             entry->reader = r;
-            // Single per-subscriber scratch buffer big enough for any ring
-            // sized by writerFor (up to ~512 KiB for the camera-frame
-            // channels). 512 KB per subscriber is a one-time cost and
-            // avoids per-recv resizing logic.
-            entry->scratch.resize(512u * 1024u);
+            // Receive buffer per subscriber. It starts small and grows to the
+            // ring's payload size when a bigger frame arrives (camera frames),
+            // so a hundred small channels do not each hold a 512 KiB buffer.
+            entry->scratch.resize(kInitialScratchBytes);
             SubEntry* raw = entry.get();
             subscribers.push_back(std::move(entry));
             return raw;
         }
 
         // Sniff message timestamp from the first 8 bytes (big-endian).
-        // Every raccoon LCM message starts with an `int64_t timestamp`
-        // microseconds-since-epoch field; the encode/decode is big-endian
-        // per the LCM wire spec. Returns 0 if the buffer is too short.
+        // Every raccoon message starts with an `int64_t timestamp`
+        // microseconds-since-epoch field, encoded big-endian.
+        // Returns 0 if the buffer is too short.
         static int64_t readTimestampBE(const void* data, int len)
         {
             if (len < 8) return 0;
@@ -533,6 +588,56 @@ namespace raccoon
             for (int i = 0; i < 8; ++i)
                 v = (v << 8) | b[i];
             return v;
+        }
+
+        // ---- Handler errors -------------------------------------------------
+        //
+        // A handler that throws must not stop the spin loop, but the failure is
+        // reported: counted per channel, written to stderr for the first few per
+        // channel, and handed to the host's callback (if set).
+        std::unordered_map<std::string, uint64_t> handlerErrorCounts;  // statsMutex
+        std::atomic<uint64_t> handlerErrorTotal{0};
+        Transport::HandlerErrorHandler handlerErrorHandler;            // apiMutex
+
+        void reportHandlerError(const std::string& channel, const std::string& what)
+        {
+            handlerErrorTotal.fetch_add(1, std::memory_order_relaxed);
+            uint64_t count = 0;
+            {
+                std::lock_guard<std::mutex> lk(statsMutex);
+                count = ++handlerErrorCounts[channel];
+            }
+            if (count <= kHandlerErrorsLogged)
+            {
+                std::cerr << "raccoon::Transport: handler for '" << channel
+                          << "' threw: " << what
+                          << (count == kHandlerErrorsLogged
+                                  ? " (further errors on this channel are counted, not printed)"
+                                  : "")
+                          << "\n";
+            }
+            Transport::HandlerErrorHandler cb;
+            {
+                std::lock_guard<std::recursive_mutex> lk(apiMutex);
+                cb = handlerErrorHandler;
+            }
+            if (cb)
+            {
+                try { cb(channel, what); } catch (...) {}
+            }
+        }
+
+        // Run every handler for one frame. Exceptions are reported, not propagated.
+        void invokeHandlers(const std::string& channel,
+                            const std::vector<Transport::RawHandler>& handlers,
+                            const void* data, int len)
+        {
+            for (const auto& h : handlers)
+            {
+                try { h(data, len); }
+                catch (const std::exception& e) { reportHandlerError(channel, e.what()); }
+                catch (...) { reportHandlerError(channel, "unknown exception"); }
+            }
         }
     };
 
@@ -544,10 +649,9 @@ namespace raccoon
     Transport Transport::create(const std::string& provider)
     {
         Transport t;
-        // The provider parameter is preserved for API compatibility with
-        // the old LCM signature; raccoon_ring has no analogous concept
-        // (every channel lives at /dev/shm/raccoon_ring_<encoded>) so we
-        // just thread it into the Impl ctor for symmetry.
+        // The provider string is accepted for compatibility with callers that
+        // pass one; it has no effect, because every channel lives at
+        // /dev/shm/raccoon_ring_<encoded>.
         t.impl_ = std::make_unique<Impl>(provider);
         return t;
     }
@@ -675,6 +779,17 @@ namespace raccoon
     {
         if (!impl_ || !impl_->isAlive()) return 0;
 
+        // Count this call so shutdown() waits for it before it closes the readers
+        // used below. The liveness check after the increment closes the gap
+        // between the check above and the increment.
+        struct SpinGuard
+        {
+            Impl& impl;
+            explicit SpinGuard(Impl& i) : impl(i) { impl.activeSpins.fetch_add(1); ++tlsSpinDepth; }
+            ~SpinGuard() { --tlsSpinDepth; impl.activeSpins.fetch_sub(1); }
+        } spinGuard(*impl_);
+        if (!impl_->isAlive()) return 0;
+
         const auto t0 = std::chrono::steady_clock::now();
         int delivered = 0;
 
@@ -707,6 +822,22 @@ namespace raccoon
                                              sub->scratch.data(),
                                              sub->scratch.size(),
                                              &outLen);
+                    if (rc == RRB_RECV_TOO_BIG)
+                    {
+                        // The frame is bigger than the buffer: grow it to what this
+                        // frame needs (not to the ring's max_payload, which can be
+                        // many MiB) and take the frame again.
+                        sub->scratch.resize(outLen);
+                        rc = rrb_reader_recv(sub->reader,
+                                             sub->scratch.data(),
+                                             sub->scratch.size(),
+                                             &outLen);
+                        if (rc == RRB_RECV_TOO_BIG)
+                        {
+                            rrb_reader_skip(sub->reader);  // cannot happen; never wedge on it
+                            continue;
+                        }
+                    }
                     if (rc != 0) break;  // 1 = no data, -1 = error
                     frame.assign(sub->scratch.begin(),
                                  sub->scratch.begin() + outLen);
@@ -724,11 +855,8 @@ namespace raccoon
                 }
 
                 const auto cbStart = std::chrono::steady_clock::now();
-                for (auto& h : handlersCopy)
-                {
-                    try { h(frame.data(), (int)frame.size()); }
-                    catch (...) { /* swallow — handlers must not abort spin */ }
-                }
+                impl_->invokeHandlers(sub->channel, handlersCopy,
+                                      frame.data(), (int)frame.size());
                 const auto cbEnd = std::chrono::steady_clock::now();
                 recordCallback(sub->channel,
                     std::chrono::duration_cast<std::chrono::microseconds>(
@@ -781,17 +909,15 @@ namespace raccoon
                     c->t->recordLatency(sub->channel, nowUs - msgUs);
                 std::vector<Transport::RawHandler> handlersCopy;
                 {
-                    // recordLatency takes its own lock; handler list
-                    // copy needs apiMutex.
+                    // recordLatency takes its own lock; the handler list is
+                    // guarded by apiMutex (subscribeRaw appends to it).
+                    std::lock_guard<std::recursive_mutex> lk(c->t->impl_->apiMutex);
                     handlersCopy = sub->handlers;
                 }
                 // Same accounting as the drain pass above: every frame handed to a user
                 // handler counts as a delivery (recordLatency skips payloads < 8 bytes).
                 const auto cbStart = std::chrono::steady_clock::now();
-                for (auto& h : handlersCopy) {
-                    try { h(data, (int)len); }
-                    catch (...) {}
-                }
+                c->t->impl_->invokeHandlers(sub->channel, handlersCopy, data, (int)len);
                 const auto cbEnd = std::chrono::steady_clock::now();
                 c->t->recordCallback(sub->channel,
                     std::chrono::duration_cast<std::chrono::microseconds>(
@@ -846,12 +972,17 @@ namespace raccoon
     void Transport::shutdown()
     {
         if (!impl_) return;
+        // Impl::shutdown() wakes any thread parked in spinOnce() and waits (for a
+        // bounded time) until those calls have returned, then releases the
+        // readers and writers.
         impl_->shutdown();
-        // wakeControl() works even after shutdown — the controlSeq lives
-        // in Impl, which we still own, and the futex word doesn't care.
-        // Without this, anyone still parked in spinOnce would wait up to
-        // the watchdog timeout (1 s) for their wait to expire.
-        wakeControl();
+    }
+
+    void Transport::setHandlerErrorHandler(HandlerErrorHandler handler)
+    {
+        if (!impl_) return;
+        std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+        impl_->handlerErrorHandler = std::move(handler);
     }
 
     void Transport::wakeControl()
@@ -862,10 +993,7 @@ namespace raccoon
         // list, etc.) then FUTEX_WAKE so a parked spin thread exits its
         // wait immediately. The waker side never blocks: FUTEX_WAKE on
         // a word with no waiters is a ~50 ns no-op.
-        std::atomic_fetch_add_explicit(&impl_->controlSeq, uint32_t{1},
-                                       std::memory_order_release);
-        syscall(SYS_futex, &impl_->controlSeq, FUTEX_WAKE, INT_MAX,
-                nullptr, nullptr, 0);
+        impl_->wake();
     }
 
     bool Transport::is_alive() const noexcept
@@ -873,7 +1001,7 @@ namespace raccoon
         return impl_ && impl_->isAlive();
     }
 
-    // ---- Stats wiring (drop-in replacement for the iceoryx2 version) ---
+    // ---- Stats wiring --------------------------------------------------
 
     void Transport::recordLatency(const std::string& channel, int64_t us)
     {
@@ -970,6 +1098,8 @@ namespace raccoon
             impl_->reliableRetransmits.exchange(0, std::memory_order_relaxed);
         out.reliableDropped =
             impl_->reliableDropped.exchange(0, std::memory_order_relaxed);
+        out.handlerErrors =
+            impl_->handlerErrorTotal.exchange(0, std::memory_order_relaxed);
 
         for (auto& [ch, acc] : impl_->channelStats) {
             TransportStats::Channel c{};
@@ -982,7 +1112,7 @@ namespace raccoon
             out.channels.push_back(std::move(c));
         }
 
-        // Reset accumulators (same semantics as the iceoryx2 version)
+        // Reset the accumulators
         impl_->latencyMinUs = std::numeric_limits<int64_t>::max();
         impl_->latencyMaxUs = 0;
         impl_->latencySumUs = 0;

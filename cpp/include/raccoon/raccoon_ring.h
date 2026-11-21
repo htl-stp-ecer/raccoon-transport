@@ -1,49 +1,41 @@
-// raccoon_ring — minimal single-producer multi-consumer SHM ring buffer.
+// raccoon_ring — shared-memory ring buffers with one writer and any number of readers.
 //
-// Why this exists
-// ---------------
-// iceoryx2's stateful service-descriptor model proved unreliable on our
-// Pi setup. A long-lived reader publishing on ~100 channels makes new
-// iceoryx2 nodes fail at NodeBuilder::create() with InternalError, and
-// even when subscribes succeed, frames don't always reach the subscriber.
-// raccoon_ring side-steps all of that with a deliberately boring design:
+// Design
+// ------
+// One file per channel under /dev/shm. The writer maps it and writes frames into a
+// fixed number of slots. Readers map the same file and follow the producer sequence
+// counter. There is no service descriptor, no daemon and no per-channel handshake:
+// processes come and go freely. A crashed reader leaves nothing behind. A crashed
+// writer leaves a ring that readers see no new frames on; a restarted writer
+// re-initialises the ring in place and readers re-synchronise.
 //
-// One file per channel under /dev/shm/. Producer mmaps it, writes frames
-// into a fixed-size slot ring. Subscribers mmap the same file and poll
-// the producer sequence counter. There is no service descriptor, no
-// daemon, no per-channel handshake. Producers and consumers come and go
-// freely — a consumer crash leaves stale memory which the next reader
-// simply overwrites. A producer crash means subscribers see no new
-// sequence number; when the producer comes back it bumps the sequence
-// and writes a fresh init frame. No "marked for destruction" state to
-// get stuck in.
-//
-// Tradeoffs vs iceoryx2
-// ---------------------
-// * Pure polling, no event-driven receive. We pick a poll interval
-//   that matches the desired display rate (~1 ms = 1 kHz max). At
-//   typical sensor rates (200 Hz reader, 30-60 Hz UI) the polling
-//   overhead is < 1 % of a Pi core.
-// * No zero-copy. Producer copies into the slot, subscriber copies out.
-//   For raccoon's typical sensor frames (< 100 bytes LCM-encoded) this
-//   is single-digit microseconds — well below the 100 Hz publish budget.
-// * Single producer per channel. The exception is the reliable-delivery ACK
-//   channel, which every subscriber process writes to: it uses the opt-in
-//   multi-producer mode (rrb_writer_create_multi). All other channels stay
-//   single-producer — raccoon's reader is the sole publisher of every sensor
-//   channel, and the bridge is the sole publisher of any command channel it owns.
+// Behaviour
+// ---------
+// * Event-driven receive. A writer bumps a futex word in the header after every
+//   publish and wakes the readers that are parked on it; a reader can park on the
+//   futex words of many rings at once (futex_waitv, Linux 5.16 and later, with a
+//   1 ms polling fallback on older kernels).
+// * No zero-copy. The writer copies into a slot and the reader copies out. Raccoon's
+//   frames are small (sensor values, commands), so the copy costs microseconds.
+// * One writer per channel. The exception is the reliable-delivery ACK channel,
+//   which every process that acknowledges a command writes to: it uses the opt-in
+//   multi-producer mode (rrb_writer_create_multi). Two processes that both create a
+//   single-writer ring for the same channel corrupt each other's sequence counter.
+// * The file never shrinks. A reader may have a larger ring mapped, and a page
+//   beyond a shortened end of file raises SIGBUS in it.
 //
 // Safety model
 // ------------
-// * Per-slot SeqLock: the producer marks a slot as "being written"
-//   (seq = 0), writes payload, then publishes the sequence number.
-//   Subscribers re-read the seq after the copy to confirm the slot
-//   wasn't overwritten mid-copy. On overrun the subscriber skips.
-// * Producer never blocks on slow subscribers. Subscribers either
-//   keep up or lose frames — exactly the LCM semantics raccoon-lib
-//   was originally built on.
-// * File magic + version field so a stale ring from a prior incompatible
-//   build is detected (subscriber sees mismatch, treats it as empty).
+// * Per-slot seqlock: the writer marks a slot as "being written" (seq = 0), writes
+//   the payload, then publishes the sequence number. A reader reads the sequence
+//   number again after the copy to confirm that the slot was not overwritten
+//   during the copy. On overrun the reader skips to the oldest intact slot.
+// * The writer never blocks on slow readers. Readers either keep up or lose
+//   frames: a reader always sees the most recent frames and never waits for old
+//   ones.
+// * The header carries a magic number and a version, so a ring from an
+//   incompatible build is detected (the reader treats it as empty). A reader also
+//   checks that the geometry in the header fits the file before it indexes into it.
 
 #ifndef RACCOON_RING_H
 #define RACCOON_RING_H
@@ -56,8 +48,8 @@ extern "C" {
 #endif
 
 // SHM file layout: ring_hdr_t followed by slot_count slot_t records, each
-// of `sizeof(slot_t) + max_payload` bytes. All atomics are uint64_t for
-// 64-bit relaxed/release semantics on aarch64 + x86_64.
+// of `sizeof(slot_t) + max_payload` bytes (rounded up to 8). The sequence
+// counters are 64-bit atomics, the futex words are 32-bit.
 //
 // The header lives at offset 0 of the mmap region. Both writer and reader
 // agree on slot_size by reading max_payload from the header — subscribers
@@ -72,9 +64,9 @@ extern "C" {
 #define RRB_VERSION    3u
 
 // Default sizing: 64 slots × 2 KiB payload = ~130 KiB per channel.
-// Big enough for any LCM message in raccoon-transport's catalogue
-// (the screen_render / cam_frame channels go up to ~30 KiB; those
-// can be created with a larger max_payload at open time).
+// Big enough for any message in raccoon-transport's catalogue except the
+// screen_render and cam_frame channels (up to a few hundred KiB); those create
+// their ring with a larger max_payload.
 #define RRB_DEFAULT_SLOT_COUNT   64u
 #define RRB_DEFAULT_MAX_PAYLOAD  2048u
 
@@ -96,6 +88,9 @@ typedef struct rrb_reader_s rrb_reader_t;
 // and re-initialised — only one producer per channel by design, so the
 // previous producer was either us (restart, safe) or an unrelated process
 // (which has no business publishing on the same channel anyway).
+// The file never shrinks: a ring that is re-created with a smaller geometry
+// keeps its size, because readers may have the larger file mapped and would
+// get SIGBUS on a page beyond a shortened end of file.
 //
 // channel must be a valid path component — slashes are URL-encoded to
 // `_2F` internally so `/dev/shm/raccoon_ring_<encoded>` is one flat file.
@@ -142,14 +137,29 @@ void rrb_writer_destroy(rrb_writer_t* w);
 // Returns NULL only on irrecoverable error (e.g. /dev/shm unwritable).
 rrb_reader_t* rrb_reader_open(const char* channel);
 
-// Try to receive the next frame. If no new frame is available, returns 1.
-// If a frame is available, copies up to `buf_size` bytes into `buf`,
-// stores the actual payload length in `*out_len`, and returns 0.
+// Return code of rrb_reader_recv for a frame that does not fit the buffer.
+#define RRB_RECV_TOO_BIG 2
+
+// Try to receive the next frame.
+//   0                  A frame was copied into `buf`; `*out_len` is its length.
+//   1                  No new frame.
+//   RRB_RECV_TOO_BIG   The next frame is larger than `buf_size`. Nothing is
+//                      copied and the frame is NOT consumed; `*out_len` is the
+//                      buffer size it needs. Call again with a buffer of that
+//                      size, or call rrb_reader_skip() to drop the frame.
+//   -1                 Hard error (invalid handle).
 // On overrun (producer lapped us before we could read), the lost frames
-// are silently skipped — subscribers always see the most recent frames,
+// are skipped — subscribers always see the most recent frames,
 // never wait for old ones.
-// Returns -1 on hard error (handle invalid, ring magic broken).
 int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len);
+
+// Drop the frame that the last rrb_reader_recv() reported as RRB_RECV_TOO_BIG.
+// Returns 0 when a frame was dropped, 1 when there was none pending.
+int rrb_reader_skip(rrb_reader_t* r);
+
+// Largest payload the attached ring can carry, 0 while the reader is not
+// attached to a ring. A buffer of this size always fits every frame of the ring.
+size_t rrb_reader_max_payload(const rrb_reader_t* r);
 
 // Event-driven receive. Identical contract to rrb_reader_recv except
 // that when no data is available, the calling thread sleeps inside a
@@ -181,7 +191,9 @@ int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
 // `n` may be up to 128 (the kernel cap on FUTEX_WAITV is 128 entries).
 //
 // Returns the number of frames delivered. 0 on clean timeout/no-data,
-// -1 on error (n out of range, allocation failed, syscall unsupported).
+// -1 on error (n out of range, allocation failed). A kernel without
+// futex_waitv (before Linux 5.16) is handled by polling every millisecond
+// instead of parking, so the call keeps working with a coarser wake latency.
 typedef int (*rrb_multi_handler)(size_t reader_index,
                                  const void* payload, size_t len,
                                  void* user);
