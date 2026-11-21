@@ -5,12 +5,23 @@ import time
 import pytest
 
 from raccoon_transport import ProtocolChannels, Transport
+from raccoon_transport import transport as transport_module
 from raccoon_transport.types.raccoon.ack_t import ack_t
 from raccoon_transport.types.raccoon.envelope_t import envelope_t
 from raccoon_transport.types.raccoon.retain_request_t import retain_request_t
 
 
 _channel_counter = itertools.count()
+
+
+@pytest.fixture(autouse=True)
+def isolated_broker():
+    # Every Transport("memq://") shares one in-process broker, and the tests do not
+    # close their transports. Without a fresh broker per test, the subscriptions of
+    # earlier tests receive (and answer) the messages of later ones.
+    transport_module._BROKERS.clear()
+    yield
+    transport_module._BROKERS.clear()
 
 
 def unique_channel(prefix: str) -> str:
@@ -27,7 +38,7 @@ def spin_until_idle(transport: Transport, limit: int = 64):
 def encode_manual_retain_request(channel: str) -> bytes:
     channel_bytes = channel.encode("utf-8")
     return (
-        struct.pack(">qq", 0, 0)
+        struct.pack(">q", 0)
         + struct.pack(">i", len(channel_bytes))
         + channel_bytes
         + struct.pack(">i", 0)
@@ -69,11 +80,6 @@ def test_request_retained_missing_channel_is_silent():
     assert called is False
 
 
-@pytest.mark.skip(
-    reason="retain_request_t wire format no longer matches the in-process retain"
-    " handler after the lcm-gen drop in cc7d9e7; retain/reliable are slated for"
-    " removal entirely (see c746cf2). Re-enable once the new retain protocol is in."
-)
 def test_retain_handler_accepts_generated_request_format():
     transport = Transport("memq://")
     channel = unique_channel("unit/generated-request")

@@ -61,11 +61,15 @@ class _Memq:
         deadline = time.monotonic() + timeout_ms / 1000.0
         while True:
             with self._lock:
-                if self._queue:
-                    sub, channel, data = self._queue.popleft()
-                    if sub.active:
-                        sub.callback(channel, data)
-                        return 1
+                item = self._queue.popleft() if self._queue else None
+            if item is not None:
+                sub, channel, data = item
+                if sub.active:
+                    # The callback runs without the lock: handlers publish (retain
+                    # replies, acknowledgements) and publish() takes the same lock.
+                    sub.callback(channel, data)
+                    return 1
+                continue
             if timeout_ms <= 0 or time.monotonic() >= deadline:
                 return 0
             time.sleep(0.001)
