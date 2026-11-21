@@ -4,11 +4,11 @@
 // Motivation: the cone-pusher lower command
 // (hardware/motor/3/cmd/velocity = -1300) was published best-effort exactly
 // once, lost in transport, and the motor sat still — the mode/brake that
-// followed WAS delivered, so the failure was silent. `PublishOptions.reliable`
-// existed but was a no-op. These tests pin the new contract:
+// followed WAS delivered, so the failure was silent. `reliable` is a property of the channel in the channel table. These
+// tests pin the contract:
 //   1. a reliable command is re-sent until the subscriber ACKs it,
 //   2. re-sends are de-duplicated (handler fires once per unique command),
-//   3. with no subscriber the publisher gives up after max_retries and says so,
+//   3. with no subscriber the publisher gives up after 20 sends and says so,
 //   4. the whole loop closes ACROSS PROCESSES (robot ↔ stm32-data-reader).
 
 #include "raccoon/Transport.h"
@@ -119,20 +119,15 @@ namespace
         raccoon::Transport sub = raccoon::Transport::create();
         std::atomic<int> count{0};
         require(sub.subscribe_raw(kChannel,
-                    [&count](const void*, int) { count.fetch_add(1); },
-                    raccoon::SubscribeOptions{.reliable = true}),
+                    [&count](const void*, int) { count.fetch_add(1); }),
                 "subscribe failed");
         Spinner subSpin(sub);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         raccoon::Transport pub = raccoon::Transport::create();
         auto payload = makePayload(/*ts=*/1000, /*value=*/-1300);
-        raccoon::PublishOptions po;
-        po.reliable = true;
-        po.retry_interval = std::chrono::milliseconds(20);
-        po.max_retries = 10;
         require(ok(pub.publish_raw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po)),
+                               static_cast<int>(payload.size()))),
                 "publish failed");
 
         require(waitFor([&] { return count.load() >= 1; },
@@ -159,20 +154,15 @@ namespace
         raccoon::Transport sub = raccoon::Transport::create();
         std::atomic<int> count{0};
         require(sub.subscribe_raw(kChannel,
-                    [&count](const void*, int) { count.fetch_add(1); },
-                    raccoon::SubscribeOptions{.reliable = true}),
+                    [&count](const void*, int) { count.fetch_add(1); }),
                 "subscribe failed");
         // NOTE: not spinning `sub` yet — ACKs cannot flow, so the publisher
         // is forced to retransmit.
 
         raccoon::Transport pub = raccoon::Transport::create();
         auto payload = makePayload(/*ts=*/2000, /*value=*/-1300);
-        raccoon::PublishOptions po;
-        po.reliable = true;
-        po.retry_interval = std::chrono::milliseconds(20);
-        po.max_retries = 50;
         require(ok(pub.publish_raw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po)),
+                               static_cast<int>(payload.size()))),
                 "publish failed");
 
         // Let the retry thread fire several retransmits with no ACK.
@@ -194,20 +184,16 @@ namespace
                 "expected at least one retransmit while subscriber was silent");
     }
 
-    // 3. Bounded give-up: with no subscriber, the publisher retries max_retries
-    //    times and then drops the command, incrementing reliable_dropped (the
+    // 3. Bounded give-up: with no subscriber, the publisher sends the command 20 times (one second)
+    //     and then drops the command, incrementing reliable_dropped (the
     //    loud, chase-worthy visibility signal).
     void testReliableGivesUpWithoutSubscriber()
     {
         cleanAll();
         raccoon::Transport pub = raccoon::Transport::create();
         auto payload = makePayload(/*ts=*/3000, /*value=*/-1300);
-        raccoon::PublishOptions po;
-        po.reliable = true;
-        po.retry_interval = std::chrono::milliseconds(20);
-        po.max_retries = 3;
         require(ok(pub.publish_raw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po)),
+                               static_cast<int>(payload.size()))),
                 "publish failed");
 
         require(waitFor(
@@ -215,7 +201,7 @@ namespace
                         auto s = pub.get_and_reset_stats();
                         return s.reliable_dropped >= 1;
                     },
-                    std::chrono::seconds(2)),
+                    std::chrono::seconds(4)),
                 "publisher never gave up on an undeliverable reliable command");
     }
 
@@ -234,8 +220,7 @@ namespace
             raccoon::Transport rx = raccoon::Transport::create();
             std::atomic<bool> got{false};
             rx.subscribe_raw(kChannel,
-                            [&got](const void*, int) { got.store(true); },
-                            raccoon::SubscribeOptions{.reliable = true});
+                            [&got](const void*, int) { got.store(true); });
             const auto deadline =
                 std::chrono::steady_clock::now() + std::chrono::seconds(5);
             while (!got.load() &&
@@ -254,12 +239,8 @@ namespace
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         raccoon::Transport pub = raccoon::Transport::create();
         auto payload = makePayload(/*ts=*/4000, /*value=*/-1300);
-        raccoon::PublishOptions po;
-        po.reliable = true;
-        po.retry_interval = std::chrono::milliseconds(30);
-        po.max_retries = 100;
         require(ok(pub.publish_raw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po)),
+                               static_cast<int>(payload.size()))),
                 "publish failed");
 
         int status = 0;
@@ -298,12 +279,8 @@ namespace
             });
 
         auto payload = makePayload(/*ts=*/5000, /*value=*/-1300);
-        raccoon::PublishOptions po;
-        po.reliable = true;
-        po.retry_interval = std::chrono::milliseconds(20);
-        po.max_retries = 3;
         require(ok(pub.publish_raw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po)),
+                               static_cast<int>(payload.size()))),
                 "publish failed");
 
         require(waitFor(
@@ -311,12 +288,43 @@ namespace
                         std::lock_guard<std::mutex> lk(m);
                         return gaveUp >= 1;
                     },
-                    std::chrono::seconds(2)),
+                    std::chrono::seconds(4)),
                 "handler never received a GaveUp event");
         std::lock_guard<std::mutex> lk(m);
         require(retransmits >= 1, "handler received no Retransmit event");
         require(lastChannel == kChannel,
                 "handler got wrong channel: " + lastChannel);
+    }
+
+    // 6. The same command twice with different timestamps is two commands, and
+    //    interleaved re-sends of several commands are each delivered once.
+    void testReliableWindowKeepsDistinctCommands()
+    {
+        cleanAll();
+        raccoon::Transport sub = raccoon::Transport::create();
+        std::mutex m;
+        std::vector<int64_t> seen;
+        require(sub.subscribe_raw(kChannel, [&](const void* d, int n) {
+                    std::lock_guard<std::mutex> lk(m);
+                    int64_t ts = 0;
+                    for (int i = 0; i < 8 && n >= 8; ++i) ts = (ts << 8) | static_cast<const uint8_t*>(d)[i];
+                    seen.push_back(ts);
+                }),
+                "subscribe failed");
+        Spinner subSpin(sub);
+        raccoon::Transport pub = raccoon::Transport::create();
+        // Raw frames written straight to the channel: A, B, A (a re-send), A (again), C,
+        // and D with the same timestamp as A but another value (a different command).
+        auto a = makePayload(7001, 5), b = makePayload(7002, 5), c = makePayload(7003, 5);
+        auto d = makePayload(7001, 6);
+        for (auto* p : {&a, &b, &a, &a, &c, &d})
+            require(ok(pub.publish_raw(kChannel, p->data(), p->size())), "publish failed");
+        require(waitFor([&] { std::lock_guard<std::mutex> lk(m); return seen.size() >= 4; },
+                        std::chrono::seconds(2)), "commands not delivered");
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::lock_guard<std::mutex> lk(m);
+        require(seen.size() == 4, "expected A, B, C, D once each, got " + std::to_string(seen.size()));
+        require(seen[0] == 7001 && seen[1] == 7002 && seen[2] == 7003 && seen[3] == 7001, "wrong order or content");
     }
 
     void runTest(const char* name, const std::function<void()>& fn)
@@ -342,6 +350,8 @@ int main()
     runTest("test_reliable_gives_up_without_subscriber",
             testReliableGivesUpWithoutSubscriber);
     runTest("test_reliable_cross_process", testReliableCrossProcess);
+    runTest("test_reliable_window_keeps_distinct_commands",
+            testReliableWindowKeepsDistinctCommands);
     runTest("test_reliable_event_handler", testReliableEventHandler);
     cleanAll();
     return 0;

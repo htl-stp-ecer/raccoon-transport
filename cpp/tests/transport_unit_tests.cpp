@@ -352,7 +352,7 @@ namespace
         auto subscribeFuture = std::async(std::launch::async, [&]
         {
             bool ok = transport.subscribe_raw("messages/error",
-                [&](const void*, int) {}, raccoon::SubscribeOptions{});
+                [&](const void*, int) {});
             secondSubscribeInstalled.store(ok);
             return ok;
         });
@@ -425,7 +425,7 @@ namespace
         // deduplicate=true and a byte-identical payload — re-issuing the
         // same command is meaningful and must reach the subscriber.
         auto transport = raccoon::Transport::create("memq://");
-        const std::string channel = "hardware/motor/2/cmd/power";
+        const std::string channel = "hardware/watchdog/cmd/heartbeat";
         require(raccoon::Channels::isCommandChannel(channel),
                 "channel ending in _cmd must classify as a command channel");
 

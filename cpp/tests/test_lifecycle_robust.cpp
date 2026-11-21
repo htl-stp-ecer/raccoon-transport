@@ -68,12 +68,8 @@ namespace
         removeRing(CH);
         {
             raccoon::Transport t = raccoon::Transport::create();
-            raccoon::PublishOptions options{};
-            options.reliable = true;
-            options.max_retries = 2;
-            options.retry_interval = std::chrono::milliseconds(20);
             auto p = payload(1234567);
-            check(ok(t.publish_raw(CH, p.data(), static_cast<int>(p.size()), options)),
+            check(ok(t.publish_raw(CH, p.data(), p.size())),
                   "reliable publish succeeds and starts the reliability thread");
             t.stop();
             // Leaving the scope destroys a Transport whose reliability thread was

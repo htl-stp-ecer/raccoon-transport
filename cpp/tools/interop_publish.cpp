@@ -1,7 +1,8 @@
 #include "interop_common.h"
 #include <raccoon/Transport.h>
 
-// Interop tool: `--reliable` publishes with PublishOptions::reliable.
+// Interop tool: `--reliable` keeps the process alive after publishing so that the
+// acknowledgements of a reliable channel can arrive.
 #if defined(__GNUC__) || defined(__clang__)
 #  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
@@ -61,7 +62,6 @@ int main(int argc, char* argv[]) {
 
     auto transport = raccoon::Transport::create();
     raccoon::PublishOptions opts;
-    opts.reliable = reliable;
 
     for (int seq = 0; seq < count; seq++) {
         auto encoded = createAndEncode(type, values);

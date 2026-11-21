@@ -64,8 +64,6 @@ int main(int argc, char* argv[]) {
     auto transport = raccoon::Transport::create();
     int received = 0;
 
-    raccoon::SubscribeOptions opts;
-    opts.reliable = reliable;
 
     transport.subscribe_raw(channel, [&](const void* data, int dataLen) {
         try {
@@ -75,7 +73,7 @@ int main(int argc, char* argv[]) {
         } catch (const std::exception& e) {
             std::cerr << "Decode error: " << e.what() << '\n';
         }
-    }, opts);
+    });
 
     printEvent("{\"event\":\"subscribed\"}");
 

@@ -35,9 +35,11 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -62,10 +64,14 @@ namespace raccoon
     namespace
     {
         constexpr int kSpinIdleSleepMs = 1;
-        // How often the background reliability thread drains ACKs and
-        // re-sends un-acked commands. Finer than the default 50 ms retry
-        // interval so retries fire close to schedule.
-        constexpr int kReliabilityTickMs = 5;
+        // A command that is not acknowledged within this time is sent again.
+        constexpr auto kRetryInterval = std::chrono::milliseconds(50);
+        // A command that is not acknowledged after this many sends is given up
+        // (about one second), so the pending list cannot grow without bound.
+        constexpr uint32_t kMaxAttempts = 20;
+        // Keys (timestamp and CRC32 of the payload) a reliable subscriber remembers to
+        // recognise re-sends.
+        constexpr size_t kDedupWindow = 64;
         // How long shutdown() waits for spin_once() calls on other threads to
         // return before it gives up closing the readers they may still use.
         constexpr int kShutdownSpinWaitMs = 1000;
@@ -73,6 +79,44 @@ namespace raccoon
         constexpr uint64_t kHandlerErrorsLogged = 3;
         // Initial receive buffer per subscriber; it grows to the ring's payload size.
         constexpr size_t kInitialScratchBytes = 16 * 1024;
+
+        uint32_t crc32(const void* data, size_t len)
+        {
+            static const auto table = [] {
+                std::array<uint32_t, 256> t{};
+                for (uint32_t i = 0; i < 256; ++i)
+                {
+                    uint32_t c = i;
+                    for (int k = 0; k < 8; ++k) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+                    t[i] = c;
+                }
+                return t;
+            }();
+            uint32_t c = 0xFFFFFFFFu;
+            const auto* b = static_cast<const uint8_t*>(data);
+            for (size_t i = 0; i < len; ++i) c = table[(c ^ b[i]) & 0xFFu] ^ (c >> 8);
+            return c ^ 0xFFFFFFFFu;
+        }
+
+        // The last kDedupWindow keys a reliable subscriber has seen. The handler of a
+        // subscription runs on the one thread that calls spin_once(), so no lock.
+        struct DedupWindow
+        {
+            std::array<std::pair<int64_t, uint32_t>, kDedupWindow> keys{};
+            size_t next = 0;
+            size_t used = 0;
+
+            // Returns false if the key is already in the window, else remembers it.
+            bool insert(int64_t ts, uint32_t crc)
+            {
+                for (size_t i = 0; i < used; ++i)
+                    if (keys[i].first == ts && keys[i].second == crc) return false;
+                keys[next] = {ts, crc};
+                next = (next + 1) % kDedupWindow;
+                if (used < kDedupWindow) ++used;
+                return true;
+            }
+        };
 
         // Depth of spin_once() calls on this thread, so shutdown() called from a
         // handler does not wait for (and free state under) the spin it runs in.
@@ -231,6 +275,7 @@ namespace raccoon
             // grabs apiMutex on every tick, so joining while holding it would
             // deadlock.
             reliableThreadRun.store(false);
+            reliableCv.notify_all();
             if (reliableThread.joinable()) reliableThread.join();
             if (spinsLeft) return;
             std::lock_guard<std::recursive_mutex> lk(apiMutex);
@@ -270,8 +315,6 @@ namespace raccoon
             int64_t key;   // == message timestamp
             std::chrono::steady_clock::time_point lastSent;
             uint32_t attempts;
-            uint32_t max_retries;
-            std::chrono::milliseconds retry_interval;
             bool warnedRetransmit;
         };
         std::vector<PendingReliable> pendingReliable;
@@ -302,16 +345,54 @@ namespace raccoon
             reliableThread = std::thread([this] { reliableLoop(); });
         }
 
+        // The reliability thread sleeps while no command is waiting for an ACK. With
+        // commands pending it parks on the ACK ring until the next one is due, so an
+        // ACK ends the wait at once and nothing wakes up on a fixed tick.
+        std::condition_variable_any reliableCv;
+
         void reliableLoop()
         {
             while (reliableThreadRun.load())
             {
                 std::vector<RelEvt> events;
                 Transport::ReliableEventHandler handler;
+                int64_t wait_us = 0;
+                {
+                    std::unique_lock<std::recursive_mutex> lk(apiMutex);
+                    if (!running.load()) break;
+                    if (pendingReliable.empty())
+                    {
+                        reliableCv.wait(lk, [this] {
+                            return !pendingReliable.empty() || !reliableThreadRun.load() ||
+                                   !running.load();
+                        });
+                        continue;
+                    }
+                    const auto now = std::chrono::steady_clock::now();
+                    auto next = now + kRetryInterval;
+                    for (const auto& p : pendingReliable) next = std::min(next, p.lastSent + kRetryInterval);
+                    wait_us = std::max<int64_t>(
+                        0, std::chrono::duration_cast<std::chrono::microseconds>(next - now).count());
+                }
+                // Park on the ACK ring outside the lock; only this thread reads it.
+                uint8_t buf[256];
+                size_t out = 0;
+                int rc = ackReader ? rrb_reader_recv_wait(ackReader, buf, sizeof(buf), &out,
+                                                         static_cast<int>(std::min<int64_t>(wait_us, 1000000)))
+                                   : 1;
                 {
                     std::lock_guard<std::recursive_mutex> lk(apiMutex);
                     if (!running.load()) break;
-                    drainAcks();
+                    for (;;)
+                    {
+                        if (rc == RRB_RECV_TOO_BIG)
+                            rrb_reader_skip(ackReader);  // an ACK is a few dozen bytes
+                        else if (rc == 0)
+                            handleAck(buf, out);
+                        else
+                            break;
+                        rc = rrb_reader_recv(ackReader, buf, sizeof(buf), &out);
+                    }
                     tickResends(events);
                     handler = reliableHandler;
                 }
@@ -341,37 +422,19 @@ namespace raccoon
                                   << e.attempts << ")\n";
                     }
                 }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(kReliabilityTickMs));
             }
         }
 
-        // Consume ACKs and clear matching pending entries. Call under apiMutex.
-        void drainAcks()
+        // Clear the pending command an ACK refers to. Call under apiMutex.
+        void handleAck(const uint8_t* buf, size_t len)
         {
-            if (!ackReader) return;
-            uint8_t buf[256];
-            for (;;)
-            {
-                size_t out = 0;
-                int rc = rrb_reader_recv(ackReader, buf, sizeof(buf), &out);
-                if (rc == RRB_RECV_TOO_BIG)
-                {
-                    // An ACK is a few dozen bytes; anything bigger is not one.
-                    rrb_reader_skip(ackReader);
-                    continue;
-                }
-                if (rc != 0) break;  // 1 = no data, -1 = error
-                ack_t ack{};
-                if (ack.decode(buf, static_cast<int>(out)) < 0) continue;
-                const int64_t key = ack.seq_num;
-                pendingReliable.erase(
-                    std::remove_if(pendingReliable.begin(),
-                                   pendingReliable.end(),
-                                   [key](const PendingReliable& p)
-                                   { return p.key == key; }),
-                    pendingReliable.end());
-            }
+            ack_t ack{};
+            if (ack.decode(buf, static_cast<int>(len)) < 0) return;
+            const int64_t key = ack.seq_num;
+            pendingReliable.erase(
+                std::remove_if(pendingReliable.begin(), pendingReliable.end(),
+                               [key](const PendingReliable& p) { return p.key == key; }),
+                pendingReliable.end());
         }
 
         // Re-send due pending commands, drop exhausted ones. Call under
@@ -384,12 +447,12 @@ namespace raccoon
             keep.reserve(pendingReliable.size());
             for (auto& p : pendingReliable)
             {
-                if (now - p.lastSent < p.retry_interval)
+                if (now - p.lastSent < kRetryInterval)
                 {
                     keep.push_back(std::move(p));
                     continue;
                 }
-                if (p.attempts >= p.max_retries)
+                if (p.attempts >= kMaxAttempts)
                 {
                     reliable_dropped.fetch_add(1, std::memory_order_relaxed);
                     out.push_back({true, p.channel, p.key, p.attempts});
@@ -413,8 +476,7 @@ namespace raccoon
         }
 
         // Record a just-published payload for retry. Call under apiMutex.
-        void recordReliable(const std::string& channel, const void* data,
-                            int dataLen, const PublishOptions& options)
+        void recordReliable(const std::string& channel, const void* data, int dataLen)
         {
             // The ACK channel itself must never be reliable (would recurse).
             if (channel == channels::protocol::ACK) return;
@@ -428,10 +490,9 @@ namespace raccoon
             p.key = key;
             p.lastSent = std::chrono::steady_clock::now();
             p.attempts = 1;
-            p.max_retries = options.max_retries;
-            p.retry_interval = options.retry_interval;
             p.warnedRetransmit = false;
             pendingReliable.push_back(std::move(p));
+            reliableCv.notify_all();
         }
 
         // Subscriber side: publish an ACK for a received reliable frame,
@@ -658,21 +719,20 @@ namespace raccoon
         }
 
         if (rrb_writer_publish(w, data, len) != 0) return PublishResult::TooBig;
-        if (options.reliable)
-            impl_->recordReliable(std::string(channel), data, static_cast<int>(len), options);
+        if (info->reliable)
+            impl_->recordReliable(std::string(channel), data, static_cast<int>(len));
         return PublishResult::Ok;
     }
 
     bool Transport::subscribe_typed(std::string_view channel, const char* type_name,
-                                    RawHandler handler, const SubscribeOptions& options)
+                                    RawHandler handler)
     {
         const channels::ChannelInfo* info = channels::find_channel(channel);
         if (!info || (type_name && info->type != type_name)) return false;
-        return subscribe_raw(channel, std::move(handler), options);
+        return subscribe_raw(channel, std::move(handler));
     }
 
-    bool Transport::subscribe_raw(std::string_view channel, RawHandler handler,
-                                  const SubscribeOptions& options)
+    bool Transport::subscribe_raw(std::string_view channel, RawHandler handler)
     {
         if (!impl_ || !impl_->isAlive() || !handler) return false;
         if (!channels::find_channel(channel)) return false;
@@ -682,21 +742,23 @@ namespace raccoon
         // de-duplicated — the user handler fires once per unique command,
         // but the ACK is emitted for EVERY copy so the publisher stops
         // retransmitting even if the first delivery raced a duplicate.
-        if (options.reliable)
+        // A channel marked `reliable` in the table: acknowledge every frame (by its
+        // timestamp) and deliver each command once. A re-send has the same timestamp
+        // and payload as the original, so the subscriber remembers the last
+        // kDedupWindow keys (timestamp and CRC32 of the payload) and drops repeats;
+        // the ACK goes out for every copy, so the publisher stops re-sending even if
+        // the first ACK was lost.
+        if (channels::find_channel(channel)->reliable)
         {
             Impl* impl = impl_.get();
-            auto lastTs = std::make_shared<std::atomic<int64_t>>(0);
+            auto window = std::make_shared<DedupWindow>();
             RawHandler user = std::move(handler);
-            handler = [impl, user, lastTs](const void* data, int len)
+            handler = [impl, user, window](const void* data, int len)
             {
                 const int64_t ts = Impl::readTimestampBE(data, len);
                 impl->publishAck(ts);
-                if (ts != 0)
-                {
-                    if (ts <= lastTs->load(std::memory_order_relaxed))
-                        return;  // duplicate re-send — acked, not re-delivered
-                    lastTs->store(ts, std::memory_order_relaxed);
-                }
+                if (ts != 0 && !window->insert(ts, crc32(data, static_cast<size_t>(len))))
+                    return;  // a re-send: acknowledged, not delivered again
                 user(data, len);
             };
         }

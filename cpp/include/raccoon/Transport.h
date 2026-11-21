@@ -135,12 +135,11 @@ namespace raccoon
          * starts after the latest frame; on a retained channel it first receives the latest
          * frame.
          */
-        bool subscribe_raw(std::string_view channel, RawHandler handler,
-                           const SubscribeOptions& options = {});
+        bool subscribe_raw(std::string_view channel, RawHandler handler);
 
         /** Like `subscribe_raw`, and fails if the channel does not carry `type_name`. */
         bool subscribe_typed(std::string_view channel, const char* type_name,
-                             RawHandler handler, const SubscribeOptions& options = {});
+                             RawHandler handler);
 
         /** Reliable-delivery lifecycle events, for logging/telemetry. */
         enum class ReliableEvent
@@ -203,8 +202,7 @@ namespace raccoon
 
         template <TransportMessage T>
         bool subscribe(std::string_view channel,
-                       std::function<void(const T &)> handler,
-                       const SubscribeOptions& options = {})
+                       std::function<void(const T &)> handler)
         {
             return subscribe_typed(channel, T::type_name, [handler](const void* data, int len)
             {
@@ -213,7 +211,7 @@ namespace raccoon
                 {
                     handler(msg);
                 }
-            }, options);
+            });
         }
 
         /** Return collected stats and clear the internal counters. */
