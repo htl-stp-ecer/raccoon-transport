@@ -27,7 +27,7 @@ raccoon-transport is the messaging layer shared by the Raccoon components (racco
 
 Components must agree on the wire layout, so the transport has one short
 identifier of it: the contract hash. It is computed by `scripts/contract.py`
-from the C++ sources (message structs, channel names, ring version) and written
+from the C++ message structs, `channels.yml` and the ring version, and written
 to `contract/contract.json` plus generated constants for C++
 (`cpp/include/raccoon/Contract.h`), Python (`raccoon_transport/_contract.py`)
 and Dart (`dart/lib/src/contract.dart`). Every binary also carries the string
@@ -103,7 +103,7 @@ CI runs them without gating the release.
 ### C++ Library (`cpp/`)
 - `raccoon_ring.c` / `raccoon_ring.h` — the ring buffer (C API): writer, reader, futex wake, multi-channel wait.
 - `raccoon::Transport` — the public API (PIMPL): publish, subscribe, `spin_once`, reliable delivery, retain, statistics.
-- `raccoon::Channels` — all channel names; `isCommandChannel` decides which channels are never deduplicated (a name ending in `_cmd` or containing `/cmd/`).
+- `ChannelTable.h` (generated) — every channel with its message type and ring properties; `raccoon::dedup::isCommandChannel` decides which channels are never deduplicated (a name with a `cmd` segment).
 - `cpp/bridge/` — a C library (`libraccoon_ring_bridge.so`) that the Dart package loads through FFI.
 
 ### Dart Package (`dart/`)

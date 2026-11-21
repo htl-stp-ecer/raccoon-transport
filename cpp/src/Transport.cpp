@@ -24,7 +24,6 @@
 #include "raccoon/Transport.h"
 
 #include "raccoon/ChannelTable.h"
-#include "raccoon/Channels.h"
 #include "raccoon/Contract.h"
 #include "raccoon/Dedup.h"
 #include "raccoon/ack_t.hpp"
@@ -762,7 +761,7 @@ namespace raccoon
         // raccoon::dedup so the Dart FFI bridge shares exactly the same behaviour.
         if (options.deduplicate)
         {
-            if (dedup::shouldDrop(std::string(channel), data, len, it->second.dedupState))
+            if (dedup::shouldDrop(channel, data, len, it->second.dedupState))
             {
                 impl_->dedupCount.fetch_add(1, std::memory_order_relaxed);
                 return PublishResult::Ok;  // identical value: nothing to publish

@@ -24,11 +24,12 @@ class Tree:
         self.dir = Path(tempfile.mkdtemp())
         shutil.copytree(ROOT / "messages" / "include", self.dir / "messages" / "include")
         (self.dir / "cpp" / "include" / "raccoon").mkdir(parents=True)
-        for name in ("Channels.h", "raccoon_ring.h"):
+        shutil.copy(ROOT / "channels.yml", self.dir / "channels.yml")
+        for name in ("raccoon_ring.h",):
             shutil.copy(ROOT / "cpp" / "include" / "raccoon" / name, self.dir / "cpp" / "include" / "raccoon" / name)
         self.module = load()
         self.module.MESSAGES_DIR = self.dir / "messages" / "include" / "raccoon"
-        self.module.CHANNELS_H = self.dir / "cpp" / "include" / "raccoon" / "Channels.h"
+        self.module.CHANNELS_YML = self.dir / "channels.yml"
         self.module.RING_H = self.dir / "cpp" / "include" / "raccoon" / "raccoon_ring.h"
 
     def hash(self):
@@ -47,7 +48,7 @@ class Tree:
 
 
 SCALAR = "messages/include/raccoon/scalar_f_t.hpp"
-CHANNELS = "cpp/include/raccoon/Channels.h"
+CHANNELS = "channels.yml"
 RING = "cpp/include/raccoon/raccoon_ring.h"
 
 
@@ -84,16 +85,32 @@ class HashTests(unittest.TestCase):
         self.assertNotEqual(self.base, self.tree.hash())
 
     def test_a_new_channel_changes_it(self):
-        self.tree.edit(CHANNELS, 'constexpr auto GYRO = "raccoon/gyro/value";',
-                       'constexpr auto GYRO = "raccoon/gyro/value";\n    constexpr auto NEW_ONE = "raccoon/new/one";')
+        self.tree.edit(CHANNELS, "  - {name: hardware/imu/state/gyro,",
+                       '  - {name: hardware/new/state/one, type: scalar_f_t, doc: "x."}\n  - {name: hardware/imu/state/gyro,')
         self.assertNotEqual(self.base, self.tree.hash())
 
-    def test_channel_declaration_order_does_not_change_it(self):
+    def test_ring_properties_of_a_channel_change_it(self):
+        for old, new in (("type: vector3f_t,  doc: \"Angular velocity (rad/s).\"",
+                          "type: vector3f_t,  slots: 32, doc: \"Angular velocity (rad/s).\""),
+                         ("type: vector3f_t,  doc: \"Angular velocity (rad/s).\"",
+                          "type: vector3f_t,  reliable: true, doc: \"Angular velocity (rad/s).\""),
+                         ("type: vector3f_t,  doc: \"Angular velocity (rad/s).\"",
+                          "type: vector3f_t,  retained: false, doc: \"Angular velocity (rad/s).\"")):
+            tree = Tree()
+            self.addCleanup(tree.close)
+            tree.edit(CHANNELS, old, new)
+            self.assertNotEqual(self.base, tree.hash(), new)
+
+    def test_the_doc_of_a_channel_does_not_change_it(self):
+        self.tree.edit(CHANNELS, "Angular velocity (rad/s).", "Rotation rate.")
+        self.assertEqual(self.base, self.tree.hash())
+
+    def test_channel_order_in_the_table_does_not_change_it(self):
         text = (self.tree.dir / CHANNELS).read_text()
-        a = '    constexpr auto GYRO = "raccoon/gyro/value";\n'
-        b = '    constexpr auto ACCELEROMETER = "raccoon/accel/value";\n'
-        self.assertIn(a + b, text)  # adjacent in the real header
-        (self.tree.dir / CHANNELS).write_text(text.replace(a + b, b + a))
+        lines = text.split("\n")
+        i = next(n for n, line in enumerate(lines) if "hardware/imu/state/gyro," in line)
+        lines[i], lines[i + 1] = lines[i + 1], lines[i]
+        (self.tree.dir / CHANNELS).write_text("\n".join(lines))
         self.assertEqual(self.base, self.tree.hash())
 
     def test_ring_version_changes_it(self):

@@ -64,19 +64,18 @@ Commit the regenerated files. A changed layout changes the contract hash, so all
 
 ## Adding a channel
 
-Channel names are defined in three places that have to agree:
+A channel is an entry in `channels.yml`: its name, message type and the properties of its ring. The names in C++, Python and Dart are generated from it (see below), and the contract hash is computed from the table.
 
-| Language | File |
-|:---------|:-----|
-| C++ | `cpp/include/raccoon/Channels.h` (the contract hash is computed from this file) |
-| Python | `python/raccoon_transport/channels.py` |
-| Dart | `dart/lib/src/channels.dart` |
+Channel names consist of `0-9 a-z A-Z _ -`, segments are separated by `/`. A name has the form `<root>/<device>/<kind>/<property>`, for example `hardware/motor/{port}/cmd/power`. A channel with a `cmd` segment is a command channel: commands are never deduplicated, because repeating the same command is meaningful (see `raccoon::dedup`).
 
-Channels follow the pattern `raccoon/<device>/<property>`; the protocol channels use the `__raccoon/` prefix.
+After editing the table:
 
-The name decides how a channel is treated: a channel is a command channel when its name ends in `_cmd` or contains `/cmd/`. Commands are never deduplicated, because repeating the same command is meaningful (see `Channels::isCommandChannel` and `raccoon::dedup`).
+```bash
+python3 scripts/channels.py --write   # names for C++, Python and Dart
+python3 scripts/contract.py --write   # contract.json and the hash
+```
 
-Run `python3 scripts/contract.py --write` afterwards.
+Commit the regenerated files.
 
 ### The channel table
 

@@ -13,7 +13,6 @@
 
 #include "raccoon/Transport.h"
 #include "raccoon/ChannelTable.h"
-#include "raccoon/Channels.h"
 #include "raccoon/raccoon_ring.h"
 
 #include <atomic>

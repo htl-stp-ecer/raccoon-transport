@@ -1,5 +1,5 @@
+#include "raccoon/Dedup.h"
 #include "raccoon/ChannelTable.h"
-#include "raccoon/Channels.h"
 #include "raccoon/Options.h"
 #include "raccoon/Transport.h"
 #include "raccoon/raccoon_ring.h"
@@ -378,7 +378,7 @@ namespace
         resetRing("hardware/motor/1/state/power");
         auto transport = raccoon::Transport::create("memq://");
         const std::string channel = "hardware/motor/1/state/power";
-        require(!raccoon::Channels::isCommandChannel(channel),
+        require(!raccoon::dedup::isCommandChannel(channel),
                 "value channel must not classify as a command channel");
 
         int callbacks = 0;
@@ -426,7 +426,7 @@ namespace
         // same command is meaningful and must reach the subscriber.
         auto transport = raccoon::Transport::create("memq://");
         const std::string channel = "hardware/watchdog/cmd/heartbeat";
-        require(raccoon::Channels::isCommandChannel(channel),
+        require(raccoon::dedup::isCommandChannel(channel),
                 "channel ending in _cmd must classify as a command channel");
 
         int callbacks = 0;

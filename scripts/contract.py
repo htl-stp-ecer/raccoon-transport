@@ -4,11 +4,12 @@
 The contract is everything that components rely on when they exchange data:
 
 * the wire layout of every message type (name, ordered fields, field types),
-* every channel name (parametric channels as a pattern),
+* every channel of channels.yml with its message type, slot count, slot payload,
+  reliable and retained flag,
 * the raccoon_ring layout (magic and version).
 
-The single source is the C++ side (``messages/include`` and ``cpp/include``),
-because that is the code that defines the ring layout and the encoder order.
+The sources are the C++ message headers and ``raccoon_ring.h`` (they define the
+encoder order and the ring layout) and the channel table ``channels.yml``.
 This script reads it, writes ``contract/contract.json`` (the canonical,
 human-readable form) and the generated constants for C++, Python and Dart.
 
@@ -39,7 +40,7 @@ MARKER_PREFIX = "RACCOON_CONTRACT_V1="
 FORMAT = 1
 
 MESSAGES_DIR = ROOT / "messages" / "include" / "raccoon"
-CHANNELS_H = ROOT / "cpp" / "include" / "raccoon" / "Channels.h"
+CHANNELS_YML = ROOT / "channels.yml"
 RING_H = ROOT / "cpp" / "include" / "raccoon" / "raccoon_ring.h"
 PY_TYPES_DIR = ROOT / "python" / "raccoon_transport" / "types" / "raccoon"
 DART_TYPES_DIR = ROOT / "dart" / "lib" / "messages"
@@ -126,22 +127,32 @@ def read_types() -> dict[str, list[list[str]]]:
     return dict(sorted(types.items()))
 
 
-def read_channels() -> list[str]:
-    text = _strip_comments(CHANNELS_H.read_text())
-    channels: set[str] = set()
-    for value in re.findall(r'constexpr\s+auto\s+\w+\s*=\s*"([^"]+)"', text):
-        channels.add(value)
-    # Parametric channels: RACCOON_CACHED_CHANNEL("prefix", "suffix") -> prefix{port}suffix
-    for prefix, suffix in re.findall(
-        r'RACCOON_CACHED_CHANNEL\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)', text
-    ):
-        channels.add(f"{prefix}{{port}}{suffix}")
-    # Reliable wrapper channels are built from this prefix.
-    for prefix in re.findall(r'return\s+"(__raccoon/[^"]+)"\s*\+', text):
-        channels.add(f"{prefix}{{channel}}")
-    if not channels:
-        raise ContractError("no channels found in Channels.h")
-    return sorted(channels)
+def read_channels(types: dict[str, list[list[str]]]) -> list[dict]:
+    """Every channel of channels.yml with the properties that decide the ring layout."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import channels as table
+    finally:
+        sys.path.pop(0)
+    try:
+        document = table.parse_table(CHANNELS_YML.read_text(encoding="utf-8"))
+        channels, _ = table.expand(document, table.type_sizes({"types": types}))
+    except table.TableError as error:
+        raise ContractError(str(error)) from error
+    return sorted(
+        (
+            {
+                "name": c.name,
+                "type": c.type,
+                "slots": c.slots,
+                "payload": c.payload,
+                "reliable": c.reliable,
+                "retained": c.retained,
+            }
+            for c in channels
+        ),
+        key=lambda c: c["name"],
+    )
 
 
 def read_ring() -> dict[str, int]:
@@ -156,11 +167,12 @@ def read_ring() -> dict[str, int]:
 
 
 def build_contract() -> dict:
+    types = read_types()
     return {
         "format": FORMAT,
         "ring": read_ring(),
-        "channels": read_channels(),
-        "types": read_types(),
+        "channels": read_channels(types),
+        "types": types,
     }
 
 
@@ -195,7 +207,7 @@ def render_cpp(digest: str) -> str:
 namespace raccoon::contract
 {{
     // Contract hash of this raccoon-transport. Equal hash means equal message
-    // layouts, channel names and ring layout.
+    // layouts, channels and ring layout.
     inline constexpr const char* kHash = "{digest}";
 
     // Fixed text that precedes the hash in the marker string embedded in every
@@ -223,7 +235,7 @@ def render_dart(digest: str) -> str:
     return f"""// {HEADER}
 
 /// Contract hash of this raccoon-transport. Equal hash means equal message
-/// layouts, channel names and ring layout.
+/// layouts, channels and ring layout.
 const String raccoonContractHash = '{digest}';
 
 /// Marker string a build scan can search for in a compiled binary.

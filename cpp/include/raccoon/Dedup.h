@@ -3,9 +3,9 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "raccoon/Channels.h"
 
 // Shared value-channel deduplication used by every C++ publish path
 // (raccoon::Transport for the stm32-data-reader / raccoon-lib side, and
@@ -15,6 +15,12 @@
 // than reimplementing it.
 namespace raccoon::dedup
 {
+    // A command channel has a `cmd` segment in its name (hardware/motor/0/cmd/power).
+    inline bool isCommandChannel(std::string_view channel)
+    {
+        return channel.find("/cmd/") != std::string_view::npos;
+    }
+
     // Per-channel record of the last value bytes published with
     // deduplicate=true, stored WITHOUT the leading 8-byte timestamp.
     struct LastPayload
@@ -28,7 +34,7 @@ namespace raccoon::dedup
     // `state` to remember this value when it is not a duplicate.
     //
     // Policy:
-    //   * Command channels (Channels::isCommandChannel) are NEVER
+    //   * Command channels (isCommandChannel) are NEVER
     //     deduplicated — re-issuing the same command is meaningful and must
     //     always reach the subscriber. Returns false and leaves `state`
     //     untouched.
@@ -36,10 +42,10 @@ namespace raccoon::dedup
     //     raccoon value type stamps fresh on each publish (payloads of 8
     //     bytes or fewer are compared whole).
     //   * Returns true iff the value bytes match the previous publish.
-    inline bool shouldDrop(const std::string& channel, const void* data,
+    inline bool shouldDrop(std::string_view channel, const void* data,
                            size_t len, LastPayload& state)
     {
-        if (Channels::isCommandChannel(channel)) return false;
+        if (isCommandChannel(channel)) return false;
 
         const auto* bytes = static_cast<const uint8_t*>(data);
         const size_t off = (len > 8) ? 8u : 0u;

@@ -1,68 +1,1435 @@
 {
-  "hash": "7eb57953b1e670eb",
+  "hash": "c93592d45d6da8ea",
   "format": 1,
   "ring": {
     "magic": 1380143682,
     "version": 4
   },
   "channels": [
-    "__raccoon/ack",
-    "__raccoon/r/{channel}",
-    "__raccoon/retain_request",
-    "raccoon/accel/accuracy",
-    "raccoon/accel/value",
-    "raccoon/accel_velocity/value",
-    "raccoon/analog/{port}/value",
-    "raccoon/battery/voltage",
-    "raccoon/bemf/{port}/value",
-    "raccoon/cam/detections",
-    "raccoon/chassis/velocity_cmd",
-    "raccoon/cmd/feature/bemf_enabled",
-    "raccoon/cpu/temp/value",
-    "raccoon/digital/{port}/value",
-    "raccoon/errors",
-    "raccoon/feature/bemf_enabled",
-    "raccoon/gyro/accuracy",
-    "raccoon/gyro/value",
-    "raccoon/imu/heading",
-    "raccoon/imu/quaternion",
-    "raccoon/imu/quaternion_accuracy",
-    "raccoon/imu/temp/value",
-    "raccoon/kinematics/config_cmd",
-    "raccoon/linear_accel/value",
-    "raccoon/mag/accuracy",
-    "raccoon/mag/value",
-    "raccoon/motor/{port}/mode_cmd",
-    "raccoon/motor/{port}/pid_cmd",
-    "raccoon/motor/{port}/position",
-    "raccoon/motor/{port}/position_cmd",
-    "raccoon/motor/{port}/position_reset_cmd",
-    "raccoon/motor/{port}/power",
-    "raccoon/motor/{port}/power_cmd",
-    "raccoon/motor/{port}/stop_cmd",
-    "raccoon/motor/{port}/velocity_cmd",
-    "raccoon/odometry/heading",
-    "raccoon/odometry/pos_x",
-    "raccoon/odometry/pos_y",
-    "raccoon/odometry/reset_cmd",
-    "raccoon/odometry/vx",
-    "raccoon/odometry/vy",
-    "raccoon/odometry/wz",
-    "raccoon/screen_render",
-    "raccoon/screen_render/answer",
-    "raccoon/servo/{port}/done",
-    "raccoon/servo/{port}/feedback",
-    "raccoon/servo/{port}/health",
-    "raccoon/servo/{port}/mode",
-    "raccoon/servo/{port}/mode_cmd",
-    "raccoon/servo/{port}/position",
-    "raccoon/servo/{port}/position_cmd",
-    "raccoon/servo/{port}/smooth_cmd",
-    "raccoon/servo/{port}/velocity_cmd",
-    "raccoon/system/heartbeat_cmd",
-    "raccoon/system/shutdown_cmd",
-    "raccoon/system/shutdown_status",
-    "raccoon/yolo/frame"
+    {
+      "name": "camera/cmd/request",
+      "type": "string_t",
+      "slots": 64,
+      "payload": 1048576,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "camera/response",
+      "type": "string_t",
+      "slots": 64,
+      "payload": 1048576,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "camera/state/detections",
+      "type": "cam_detections_t",
+      "slots": 8,
+      "payload": 4194304,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "camera/state/error",
+      "type": "string_t",
+      "slots": 32,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "camera/state/frame",
+      "type": "cam_frame_t",
+      "slots": 4,
+      "payload": 67108864,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "camera/state/status",
+      "type": "string_t",
+      "slots": 32,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/analog/0/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/analog/1/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/analog/2/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/analog/3/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/analog/4/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/analog/5/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/battery/state/voltage",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/cmd/reset_gyro_bias",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "hardware/calib_board/icm/cmd/save_gyro_bias",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "hardware/calib_board/icm/state/accel",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/at_rest",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/bias_persisted",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/euler_pitch",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/euler_roll",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/euler_yaw",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/gyro",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/gyro_bias",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/gyro_corrected",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/quat_w",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/quat_x",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/quat_y",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/quat_z",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/icm/state/temperature",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/odom/cmd/reset",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/calib_board/odom/state/heading",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/odom/state/pos_x",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/odom/state/pos_y",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/cmd/reset_position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "hardware/calib_board/paa/cmd/set_calibration",
+      "type": "string_t",
+      "slots": 64,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "hardware/calib_board/paa/cmd/set_offset",
+      "type": "string_t",
+      "slots": 64,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "hardware/calib_board/paa/state/acc_x",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/acc_y",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cal_cx_per_cm",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cal_cy_per_cm",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cal_height_mm",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cal_off_x_mm",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cal_off_y_mm",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cal_valid",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cm_dx",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cm_dy",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cm_pos_x",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/cm_pos_y",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/delta_x",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/delta_y",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/motion",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/shutter",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/paa/state/squal",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/state/board",
+      "type": "string_t",
+      "slots": 32,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/state/icm",
+      "type": "string_t",
+      "slots": 32,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/state/paa",
+      "type": "string_t",
+      "slots": 32,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/state/port",
+      "type": "string_t",
+      "slots": 32,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/calib_board/state/stats",
+      "type": "string_t",
+      "slots": 32,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/chassis/cmd/stop",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/chassis/cmd/velocity",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "hardware/digital/0/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/1/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/10/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/2/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/3/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/4/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/5/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/6/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/7/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/8/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/digital/9/state/value",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/feature/cmd/bemf_active",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/feature/state/bemf_active",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/accel",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/accel_accuracy",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/accel_velocity",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/gyro",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/gyro_accuracy",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/heading",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/linear_accel",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/mag",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/mag_accuracy",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/quaternion",
+      "type": "quaternion_t",
+      "slots": 64,
+      "payload": 24,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/quaternion_accuracy",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/imu/state/temperature",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/kinematics/cmd/config",
+      "type": "kinematics_config_t",
+      "slots": 64,
+      "payload": 136,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/latch/cmd/engaged",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/latch/state/flags",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/0/cmd/mode",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/0/cmd/pid",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/0/cmd/position",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/0/cmd/power",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/0/cmd/reset_position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/0/cmd/stop",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/0/cmd/velocity",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/0/state/bemf",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/0/state/position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/0/state/power",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/1/cmd/mode",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/1/cmd/pid",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/1/cmd/position",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/1/cmd/power",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/1/cmd/reset_position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/1/cmd/stop",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/1/cmd/velocity",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/1/state/bemf",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/1/state/position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/1/state/power",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/2/cmd/mode",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/2/cmd/pid",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/2/cmd/position",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/2/cmd/power",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/2/cmd/reset_position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/2/cmd/stop",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/2/cmd/velocity",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/2/state/bemf",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/2/state/position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/2/state/power",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/3/cmd/mode",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/3/cmd/pid",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/3/cmd/position",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/3/cmd/power",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/3/cmd/reset_position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/3/cmd/stop",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/3/cmd/velocity",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/motor/3/state/bemf",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/3/state/position",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/motor/3/state/power",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/odometry/cmd/reset",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/odometry/state/heading",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/odometry/state/pos_x",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/odometry/state/pos_y",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/odometry/state/vx",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/odometry/state/vy",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/odometry/state/wz",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/0/cmd/mode",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/0/cmd/position",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/0/cmd/smooth",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/0/cmd/velocity",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/0/state/done",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/0/state/feedback",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/0/state/health",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/0/state/mode",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/0/state/position",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/1/cmd/mode",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/1/cmd/position",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/1/cmd/smooth",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/1/cmd/velocity",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/1/state/done",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/1/state/feedback",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/1/state/health",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/1/state/mode",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/1/state/position",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/2/cmd/mode",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/2/cmd/position",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/2/cmd/smooth",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/2/cmd/velocity",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/2/state/done",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/2/state/feedback",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/2/state/health",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/2/state/mode",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/2/state/position",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/3/cmd/mode",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/3/cmd/position",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/3/cmd/smooth",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/3/cmd/velocity",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "hardware/servo/3/state/done",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/3/state/feedback",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/3/state/health",
+      "type": "vector3f_t",
+      "slots": 64,
+      "payload": 20,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/3/state/mode",
+      "type": "scalar_i8_t",
+      "slots": 64,
+      "payload": 9,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/servo/3/state/position",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "hardware/watchdog/cmd/heartbeat",
+      "type": "scalar_i32_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "messages/error",
+      "type": "string_t",
+      "slots": 64,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "messages/warn",
+      "type": "string_t",
+      "slots": 64,
+      "payload": 1048576,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "protocol/ack",
+      "type": "ack_t",
+      "slots": 64,
+      "payload": 256,
+      "reliable": false,
+      "retained": false
+    },
+    {
+      "name": "system/state/cpu_temperature",
+      "type": "scalar_f_t",
+      "slots": 64,
+      "payload": 12,
+      "reliable": false,
+      "retained": true
+    },
+    {
+      "name": "ui/screen/answer",
+      "type": "screen_render_answer_t",
+      "slots": 32,
+      "payload": 1048576,
+      "reliable": true,
+      "retained": false
+    },
+    {
+      "name": "ui/screen/render",
+      "type": "screen_render_t",
+      "slots": 3,
+      "payload": 33554432,
+      "reliable": false,
+      "retained": false
+    }
   ],
   "types": {
     "ack_t": [
