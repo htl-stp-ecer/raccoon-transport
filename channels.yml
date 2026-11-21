@@ -1,0 +1,158 @@
+# raccoon-transport channel table.
+#
+# The one source of truth for every channel that exists: its name, its message
+# type and how its ring behaves. The transport is strict: only channels listed here
+# can be opened.
+#
+# Fields of a channel entry
+#   name         Channel name. Segments of 0-9 a-z A-Z _ -, separated by "/".
+#                Convention: <area>/<device>/<id>/{cmd|state}/<name>. The areas and the
+#                cmd/state segments are a convention only; nothing checks them.
+#   ports        Optional inclusive range "A..B" that replaces "{port}" in the name.
+#   type         Message type (raccoon::<type>).
+#   doc          One line: what the channel carries, with units.
+#   reliable     true: commands are acknowledged and re-sent until acknowledged
+#                (default false).
+#   retained     true: a reader that attaches gets the latest frame once (default true
+#                for channels with a "/state/" segment, false otherwise).
+#   slots        Ring depth (default 64).
+#   max_payload  Upper limit of one frame, with the suffix B, KiB or MiB (for example 256B).
+#                Required for types without a fixed size (strings, vectors of blobs);
+#                for fixed-size types the slot size follows from the type.
+#
+# Ring file: /dev/shm/raccoon-rings/<name with "." instead of "/">.
+
+format: 1
+
+channels:
+
+  # ---- hardware: IMU (STM32, published by stm32-data-reader) ----------------
+  - {name: hardware/imu/state/gyro,            type: vector3f_t,  doc: "Angular velocity (rad/s)."}
+  - {name: hardware/imu/state/accel,           type: vector3f_t,  doc: "Acceleration (m/s^2), ungated."}
+  - {name: hardware/imu/state/mag,             type: vector3f_t,  doc: "Magnetometer (raw counts)."}
+  - {name: hardware/imu/state/linear_accel,    type: vector3f_t,  doc: "Acceleration without gravity (m/s^2)."}
+  - {name: hardware/imu/state/accel_velocity,  type: vector3f_t,  doc: "Velocity integrated from the acceleration (m/s)."}
+  - {name: hardware/imu/state/quaternion,      type: quaternion_t, doc: "DMP orientation (w, x, y, z)."}
+  - {name: hardware/imu/state/heading,         type: scalar_f_t,  doc: "Heading (degrees), magnetometer-corrected when calibrated."}
+  - {name: hardware/imu/state/temperature,     type: scalar_f_t,  doc: "IMU temperature (deg C)."}
+  - {name: hardware/imu/state/gyro_accuracy,       type: scalar_i8_t, doc: "Gyro calibration accuracy 0-3."}
+  - {name: hardware/imu/state/accel_accuracy,      type: scalar_i8_t, doc: "Accelerometer calibration accuracy 0-3."}
+  - {name: hardware/imu/state/mag_accuracy,        type: scalar_i8_t, doc: "Compass calibration accuracy 0-3."}
+  - {name: hardware/imu/state/quaternion_accuracy, type: scalar_i8_t, doc: "Quaternion accuracy 0-3."}
+
+  # ---- hardware: battery and ports -------------------------------------------
+  - {name: hardware/battery/state/voltage,    type: scalar_f_t,  doc: "Battery voltage (V)."}
+  - {name: "hardware/analog/{port}/state/value",  ports: "0..5",  type: scalar_i32_t, doc: "Raw ADC counts of analog port."}
+  - {name: "hardware/digital/{port}/state/value", ports: "0..10", type: scalar_i32_t, doc: "0 or 1 for digital port."}
+
+  # ---- hardware: motors -------------------------------------------------------
+  - {name: "hardware/motor/{port}/state/power",    ports: "0..3", type: scalar_i32_t, doc: "Last commanded duty (-399..399)."}
+  - {name: "hardware/motor/{port}/state/position", ports: "0..3", type: scalar_i32_t, doc: "Accumulated BEMF ticks."}
+  - {name: "hardware/motor/{port}/state/bemf",     ports: "0..3", type: scalar_i32_t, doc: "Filtered, offset-corrected BEMF ticks."}
+  - {name: "hardware/motor/{port}/cmd/power",          ports: "0..3", type: scalar_i32_t, reliable: true, doc: "Open-loop power (-100..100 %)."}
+  - {name: "hardware/motor/{port}/cmd/velocity",       ports: "0..3", type: scalar_i32_t, reliable: true, doc: "Velocity setpoint (BEMF ticks/s)."}
+  - {name: "hardware/motor/{port}/cmd/mode",           ports: "0..3", type: scalar_i32_t, reliable: true, doc: "Raw motor control mode."}
+  - {name: "hardware/motor/{port}/cmd/stop",           ports: "0..3", type: scalar_i32_t, reliable: true, doc: "Stop the motor (passive brake). The value is unused."}
+  - {name: "hardware/motor/{port}/cmd/position",       ports: "0..3", type: vector3f_t,   reliable: true, doc: "Move to a position: x = speed limit, y = goal (BEMF ticks)."}
+  - {name: "hardware/motor/{port}/cmd/pid",            ports: "0..3", type: vector3f_t,   reliable: true, doc: "PID override: x = kp, y = ki, z = kd."}
+  - {name: "hardware/motor/{port}/cmd/reset_position", ports: "0..3", type: scalar_i32_t, reliable: true, doc: "Reset the position counter to 0. The value is unused."}
+
+  # ---- hardware: servos ---------------------------------------------------------
+  - {name: "hardware/servo/{port}/state/mode",     ports: "0..3", type: scalar_i8_t,  doc: "Servo mode: 0 fully disabled, 1 disabled, 2 PWM, 3 bus servo."}
+  - {name: "hardware/servo/{port}/state/position", ports: "0..3", type: scalar_f_t,   doc: "Servo position (degrees)."}
+  - {name: "hardware/servo/{port}/state/feedback", ports: "0..3", type: vector3f_t,   doc: "Bus servo: x = position (deg, multi-turn), y = speed (deg/s), z = load (% of max torque, signed)."}
+  - {name: "hardware/servo/{port}/state/health",   ports: "0..3", type: vector3f_t,   doc: "Bus servo: x = voltage (V), y = temperature (deg C), z = error bits (-1: no servo answers)."}
+  - {name: "hardware/servo/{port}/state/done",     ports: "0..3", type: scalar_i32_t, doc: "Bus servo: 0 moving, 1 reached, 2 stalled."}
+  - {name: "hardware/servo/{port}/cmd/position",    ports: "0..3", type: scalar_f_t,    reliable: true, doc: "Target angle (degrees)."}
+  - {name: "hardware/servo/{port}/cmd/mode",        ports: "0..3", type: scalar_i8_t,   reliable: true, doc: "Servo mode (see state/mode); mode 3 while in bus mode relaxes the servo."}
+  - {name: "hardware/servo/{port}/cmd/smooth",      ports: "0..3", type: vector3f_t,    reliable: true, doc: "Smooth move: x = angle (deg), y = speed (deg/s), z = easing."}
+  - {name: "hardware/servo/{port}/cmd/velocity",    ports: "0..3", type: scalar_f_t,    reliable: true, doc: "Bus servo: continuous rotation (deg/s, signed)."}
+
+  # ---- hardware: chassis, odometry, kinematics -----------------------------------
+  - {name: hardware/chassis/cmd/velocity, type: vector3f_t,   doc: "Chassis velocity, body frame: x = vx (m/s), y = vy (m/s), z = wz (rad/s). A stream: the next frame replaces a lost one."}
+  - {name: hardware/chassis/cmd/stop,     type: scalar_i32_t, reliable: true, doc: "Stop the chassis. The value is unused."}
+  - {name: hardware/odometry/state/pos_x,   type: scalar_f_t, doc: "World-frame x (m)."}
+  - {name: hardware/odometry/state/pos_y,   type: scalar_f_t, doc: "World-frame y (m)."}
+  - {name: hardware/odometry/state/heading, type: scalar_f_t, doc: "Heading (rad, counter-clockwise positive)."}
+  - {name: hardware/odometry/state/vx,      type: scalar_f_t, doc: "Body-frame vx (m/s)."}
+  - {name: hardware/odometry/state/vy,      type: scalar_f_t, doc: "Body-frame vy (m/s)."}
+  - {name: hardware/odometry/state/wz,      type: scalar_f_t, doc: "Body-frame wz (rad/s)."}
+  - {name: hardware/odometry/cmd/reset,     type: scalar_i32_t,         reliable: true, doc: "Reset the odometry. The value is unused."}
+  - {name: hardware/kinematics/cmd/config,  type: kinematics_config_t,  reliable: true, doc: "Kinematics for the closed loop on the STM32."}
+
+  # ---- hardware: latch, watchdog, feature flag -------------------------------------
+  - {name: hardware/latch/cmd/engaged,   type: scalar_i32_t, reliable: true, doc: "1 latches the motors off, 0 releases the latch. Servos keep holding."}
+  - {name: hardware/latch/state/flags,   type: scalar_i32_t, doc: "Latch state: 0x02 motors latched, 0x04 latched by the watchdog. Bit 0 is reserved."}
+  - {name: hardware/watchdog/cmd/heartbeat, type: scalar_i32_t, doc: "Heartbeat of the program (its PID). Without one for 500 ms the watchdog latches the motors."}
+  - {name: hardware/feature/cmd/bemf_active, type: scalar_i32_t, reliable: true, doc: "1 BEMF control on, 0 speed mode."}
+  - {name: hardware/feature/state/bemf_active, type: scalar_i32_t, doc: "BEMF control state (0 or 1)."}
+
+  # ---- system ------------------------------------------------------------------------
+  - {name: system/state/cpu_temperature, type: scalar_f_t, doc: "Pi CPU temperature (deg C)."}
+
+  # ---- messages for the user (events, not retained) -----------------------------------
+  - {name: messages/error, type: string_t, slots: 64, max_payload: 1MiB, doc: "Error shown to the user. The sender puts its name in front of the text."}
+  - {name: messages/warn,  type: string_t, slots: 64, max_payload: 1MiB, doc: "Warning shown to the user, no dialog."}
+
+  # ---- protocol -------------------------------------------------------------------------
+  - {name: protocol/ack, type: ack_t, slots: 64, max_payload: 256B, doc: "Acknowledgement of a reliable command, written by every process that acknowledges."}
+
+  # ---- ui ---------------------------------------------------------------------------------
+  - {name: ui/screen/render, type: screen_render_t,        slots: 3,  max_payload: 32MiB, doc: "State of the current screen (JSON), from the program to botui."}
+  - {name: ui/screen/answer, type: screen_render_answer_t, slots: 32, max_payload: 1MiB, reliable: true, doc: "Answer of the user to a screen, from botui to the program."}
+
+  # ---- camera -------------------------------------------------------------------------------
+  - {name: camera/state/frame,      type: cam_frame_t,      slots: 4, max_payload: 64MiB, doc: "Latest camera frame (JPEG) with its detections."}
+  - {name: camera/state/detections, type: cam_detections_t, slots: 8, max_payload: 4MiB,  doc: "Detections of the latest frame."}
+  - {name: camera/cmd/request,      type: string_t, slots: 64, max_payload: 1MiB, reliable: true, doc: "Command to the camera service (JSON)."}
+  - {name: camera/response,         type: string_t, slots: 64, max_payload: 1MiB, reliable: true, doc: "Answer of the camera service to a request (JSON). An event, not retained."}
+  - {name: camera/state/status,     type: string_t, slots: 32, max_payload: 1MiB, doc: "Status of the camera service (JSON)."}
+  - {name: camera/state/error,      type: string_t, slots: 32, max_payload: 1MiB, doc: "Error state of the camera service (JSON); a recovery overwrites it."}
+
+  # ---- hardware: calibration board (published by raccoon-calib-bridge) ---------------------------
+  # The publisher is the project calibration-board/host, which is not part of this repository.
+  - {name: hardware/calib_board/icm/state/accel,          type: vector3f_t,  doc: "ICM-42688-P acceleration (g)."}
+  - {name: hardware/calib_board/icm/state/gyro,           type: vector3f_t,  doc: "ICM-42688-P angular velocity (dps)."}
+  - {name: hardware/calib_board/icm/state/gyro_corrected, type: vector3f_t,  doc: "Gyro with the bias removed (dps)."}
+  - {name: hardware/calib_board/icm/state/gyro_bias,      type: vector3f_t,  doc: "Gyro bias (dps)."}
+  - {name: hardware/calib_board/icm/state/temperature,    type: scalar_f_t,  doc: "ICM temperature (deg C)."}
+  - {name: hardware/calib_board/icm/state/quat_w,         type: scalar_f_t,  doc: "Madgwick quaternion w."}
+  - {name: hardware/calib_board/icm/state/quat_x,         type: scalar_f_t,  doc: "Madgwick quaternion x."}
+  - {name: hardware/calib_board/icm/state/quat_y,         type: scalar_f_t,  doc: "Madgwick quaternion y."}
+  - {name: hardware/calib_board/icm/state/quat_z,         type: scalar_f_t,  doc: "Madgwick quaternion z."}
+  - {name: hardware/calib_board/icm/state/euler_roll,     type: scalar_f_t,  doc: "Roll (deg)."}
+  - {name: hardware/calib_board/icm/state/euler_pitch,    type: scalar_f_t,  doc: "Pitch (deg)."}
+  - {name: hardware/calib_board/icm/state/euler_yaw,      type: scalar_f_t,  doc: "Yaw (deg)."}
+  - {name: hardware/calib_board/icm/state/at_rest,        type: scalar_i32_t, doc: "1 when the board is at rest."}
+  - {name: hardware/calib_board/icm/state/bias_persisted, type: scalar_i32_t, doc: "1 when the gyro bias is stored."}
+  - {name: hardware/calib_board/paa/state/delta_x,  type: scalar_i32_t, doc: "PAA5100 optical flow delta x (counts)."}
+  - {name: hardware/calib_board/paa/state/delta_y,  type: scalar_i32_t, doc: "PAA5100 optical flow delta y (counts)."}
+  - {name: hardware/calib_board/paa/state/squal,    type: scalar_i32_t, doc: "Surface quality."}
+  - {name: hardware/calib_board/paa/state/shutter,  type: scalar_i32_t, doc: "Shutter."}
+  - {name: hardware/calib_board/paa/state/motion,   type: scalar_i32_t, doc: "Motion flag."}
+  - {name: hardware/calib_board/paa/state/acc_x,    type: scalar_i32_t, doc: "Free-running signed counts accumulator x."}
+  - {name: hardware/calib_board/paa/state/acc_y,    type: scalar_i32_t, doc: "Free-running signed counts accumulator y."}
+  - {name: hardware/calib_board/paa/state/cal_cx_per_cm,   type: scalar_f_t,   doc: "Calibration: counts per cm, x."}
+  - {name: hardware/calib_board/paa/state/cal_cy_per_cm,   type: scalar_f_t,   doc: "Calibration: counts per cm, y."}
+  - {name: hardware/calib_board/paa/state/cal_height_mm,   type: scalar_f_t,   doc: "Calibration: sensor height (mm)."}
+  - {name: hardware/calib_board/paa/state/cal_off_x_mm,    type: scalar_f_t,   doc: "Mounting offset from the center of rotation, x (mm, body frame)."}
+  - {name: hardware/calib_board/paa/state/cal_off_y_mm,    type: scalar_f_t,   doc: "Mounting offset from the center of rotation, y (mm, body frame)."}
+  - {name: hardware/calib_board/paa/state/cal_valid,       type: scalar_i32_t, doc: "1 when the calibration is valid."}
+  - {name: hardware/calib_board/paa/state/cm_dx,           type: scalar_f_t,   doc: "Scaled delta x (cm per sample)."}
+  - {name: hardware/calib_board/paa/state/cm_dy,           type: scalar_f_t,   doc: "Scaled delta y (cm per sample)."}
+  - {name: hardware/calib_board/paa/state/cm_pos_x,        type: scalar_f_t,   doc: "Scaled position x (cm)."}
+  - {name: hardware/calib_board/paa/state/cm_pos_y,        type: scalar_f_t,   doc: "Scaled position y (cm)."}
+  - {name: hardware/calib_board/odom/state/pos_x,    type: scalar_f_t, doc: "Odometry (PAA and quaternion): x in the world frame (cm)."}
+  - {name: hardware/calib_board/odom/state/pos_y,    type: scalar_f_t, doc: "Odometry: y in the world frame (cm)."}
+  - {name: hardware/calib_board/odom/state/heading,  type: scalar_f_t, doc: "Odometry: heading (deg)."}
+  - {name: hardware/calib_board/state/board, type: string_t, slots: 32, max_payload: 1MiB, doc: "connected or disconnected."}
+  - {name: hardware/calib_board/state/port,  type: string_t, slots: 32, max_payload: 1MiB, doc: "Serial port, for example /dev/ttyACM0, or (none)."}
+  - {name: hardware/calib_board/state/icm,   type: string_t, slots: 32, max_payload: 1MiB, doc: "ok, init_failed:<reason>, no_frames_yet or board_disconnected."}
+  - {name: hardware/calib_board/state/paa,   type: string_t, slots: 32, max_payload: 1MiB, doc: "connected, absent, init_failed:<reason> or board_disconnected."}
+  - {name: hardware/calib_board/state/stats, type: string_t, slots: 32, max_payload: 1MiB, doc: "Counters, one JSON line."}
+  - {name: hardware/calib_board/paa/cmd/set_calibration, type: string_t, slots: 64, max_payload: 1MiB, doc: "Set the PAA calibration (JSON)."}
+  - {name: hardware/calib_board/paa/cmd/set_offset,      type: string_t, slots: 64, max_payload: 1MiB, doc: "Set the PAA mounting offset (JSON)."}
+  - {name: hardware/calib_board/paa/cmd/reset_position,  type: scalar_i32_t, doc: "Reset the PAA position. The value is unused."}
+  - {name: hardware/calib_board/icm/cmd/save_gyro_bias,  type: scalar_i32_t, doc: "Store the gyro bias. The value is unused."}
+  - {name: hardware/calib_board/icm/cmd/reset_gyro_bias, type: scalar_i32_t, doc: "Discard the gyro bias. The value is unused."}
+  - {name: hardware/calib_board/odom/cmd/reset,          type: scalar_i32_t, reliable: true, doc: "Reset the odometry of the board. The value is unused."}
