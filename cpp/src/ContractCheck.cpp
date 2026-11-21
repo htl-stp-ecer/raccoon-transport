@@ -1,4 +1,4 @@
-// Startup contract check. See contract/CHECK_SPEC.md; the shared test vectors
+// Startup contract check; the Python and Dart implementations behave identically. The shared test vectors
 // in contract/check_vectors.json are run by cpp/tests/test_contract_check.cpp.
 //
 // JSON parsing uses nlohmann/json (MIT, vendored in cpp/third_party/nlohmann,

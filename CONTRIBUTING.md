@@ -17,8 +17,9 @@ cmake --build . -j$(nproc)
 ```bash
 cd dart
 dart pub get
-dart run build_runner build --delete-conflicting-outputs
 ```
+
+There is no code generation step; the message classes are written by hand.
 
 ### Python
 
@@ -28,120 +29,130 @@ pip install -e python/
 
 ---
 
-## Adding a new LCM message type
+## Adding a message type
 
-This is the most common change. All three languages consume the same message definitions, but the pipelines differ.
+Message types are written by hand in each language. C++ defines the wire layout; Python and Dart must encode and decode the same bytes. Every message starts with `int64_t timestamp` (microseconds since the epoch): the transport reads those first 8 bytes for latency statistics and as the correlation key of reliable delivery.
 
-### 1. Define the message
+### 1. C++ (defines the layout)
 
-Create a `.lcm` file in `messages/types/`:
+- Header `messages/include/raccoon/my_value_t.hpp` with the struct and the three members `encoded_size()`, `encode()` and `decode()`.
+- Implementation `messages/types/my_value_t.cpp` using `codec::Writer` and `codec::Reader` from `raccoon/codec.hpp` (see `scalar_f_t.cpp`).
+- Add the `.cpp` file to `messages/CMakeLists.txt`.
 
-```
-package raccoon;
-struct my_value_t {
-    int64_t timestamp;
-    float   value;
-}
-```
+### 2. Python
 
-### 2. C++ — automatic
-
-The C++ build picks up new `.lcm` files from `messages/` automatically via CMake. No extra steps.
-
-### 3. Python — regenerate
-
-```bash
-./scripts/generate-python-types.sh
-```
-
-This produces a new Python class in `python/raccoon_transport/types/raccoon/`. Then add the import to `python/raccoon_transport/types/raccoon/__init__.py`:
+Add `python/raccoon_transport/types/raccoon/my_value_t.py` (a dataclass with `encode()` and `decode()` built on `_codec`, see `scalar_f_t.py`) and import it in `python/raccoon_transport/types/raccoon/__init__.py`:
 
 ```python
-from .my_value_t import my_value_t as my_value_t
+from .my_value_t import my_value_t
 ```
 
-### 4. Dart — copy and regenerate
+### 3. Dart
 
-Dart keeps its own local `.lcm` copies:
+Add `dart/lib/messages/types/my_value_t.g.dart` (the `.g.dart` suffix is only a name; the file is written by hand, see `scalar_f_t.g.dart`) and export it in `dart/lib/raccoon_transport.dart`.
+
+### 4. Contract
 
 ```bash
-cp messages/types/my_value_t.lcm dart/lib/messages/
-cd dart && dart run build_runner build --delete-conflicting-outputs
+python3 scripts/contract.py --write   # regenerate contract.json and the constants
+python3 scripts/contract.py --check   # fails if Python or Dart differ from the C++ layout
 ```
 
-> **Why the copy?** The Dart package has its own LCM parser and code generator that runs via `build_runner`. It reads from `dart/lib/messages/`, not from the root `messages/` directory. This is the highest-risk drift point in the repo — always keep both in sync.
+Commit the regenerated files. A changed layout changes the contract hash, so all components have to be built against the new transport release.
 
 ---
 
 ## Adding a channel
 
-Channel constants are defined in three places (one per language). Keep them in sync:
+Channel names are defined in three places that have to agree:
 
 | Language | File |
 |:---------|:-----|
-| C++ | `cpp/include/raccoon/Channels.hpp` |
+| C++ | `cpp/include/raccoon/Channels.h` (the contract hash is computed from this file) |
 | Python | `python/raccoon_transport/channels.py` |
 | Dart | `dart/lib/src/channels.dart` |
 
-All channels follow the naming pattern `raccoon/<device>/<property>`.
+Channels follow the pattern `raccoon/<device>/<property>`; the protocol channels use the `__raccoon/` prefix.
+
+The name decides how a channel is treated: a channel is a command channel when its name ends in `_cmd` or contains `/cmd/`. Commands are never deduplicated, because repeating the same command is meaningful (see `Channels::isCommandChannel` and `raccoon::dedup`).
+
+Run `python3 scripts/contract.py --write` afterwards.
 
 ---
 
 ## Running tests
 
+### C++
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+The suites cover the ring (`test_ring_robust`, `test_multi_producer_ring`, `test_producer_restart`, `test_reader_recv_robust`), the transport lifecycle (`test_lifecycle_robust`), reliable delivery, the unit tests and the contract check.
+
+The lifecycle and ring tests are meant to run under a sanitizer as well. Configure a separate build:
+
+```bash
+cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_C_FLAGS="-fsanitize=thread" -DCMAKE_CXX_FLAGS="-fsanitize=thread" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+cmake --build build-tsan -j
+ctest --test-dir build-tsan --output-on-failure
+```
+
+Use `-fsanitize=address` for AddressSanitizer.
+
+### Contract
+
+```bash
+python3 scripts/contract.py --check
+python3 -m unittest scripts/test_contract.py python/tests/test_contract_check.py
+```
+
+### Dart
+
+```bash
+cd dart
+dart analyze
+dart test test/transport_unit_test.dart test/contract_check_test.dart
+```
+
+### Python
+
+```bash
+python3 -m pytest python/tests
+```
+
 ### Integration tests (cross-language)
 
 ```bash
-# Prerequisites: build C++, Dart, and install Python package
+# Prerequisites: build C++, Dart, and install the Python package
 PYTHONPATH=. pytest integration_tests/ -v
-
-# Filter by language pair
-PYTHONPATH=. pytest integration_tests/ -v -k "cpp"
-PYTHONPATH=. pytest integration_tests/ -v -k "dart"
-
-# Individual suites
 PYTHONPATH=. pytest integration_tests/test_cross_pubsub.py -v
-PYTHONPATH=. pytest integration_tests/test_message_compat.py -v
-PYTHONPATH=. pytest integration_tests/test_retain.py -v
-PYTHONPATH=. pytest integration_tests/test_stress.py -v
 ```
 
-### Dart analysis
-
-```bash
-cd dart && dart analyze
-```
-
-### Python import check
-
-```bash
-python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
-```
+CI runs the integration tests for information; their result does not block a release.
 
 ---
 
 ## Code style
 
-**C++** — follows existing conventions:
-- Namespace: `raccoon`
-- PIMPL pattern for public API (`Transport`)
-- `LcmMessage` concept for type constraints
+**C++**
+- Namespace `raccoon`.
+- PIMPL for the public API (`Transport`).
+- `raccoon_ring.c` is C11 and exposes a C API; keep it free of C++.
 
-**Python** — targets Python 3.8+:
-- Generated types are auto-formatted by the LCM generator — don't reformat them
-- Hand-written code (transport, channels) should be clean and readable
+**Python** targets Python 3.8+.
 
-**Dart** — standard Dart conventions:
-- Run `dart analyze` before submitting
-- Generated `.g.dart` files are not committed — they're rebuilt via `build_runner`
+**Dart** follows standard conventions; run `dart analyze` before submitting.
 
 ---
 
 ## Pull request checklist
 
-- [ ] New `.lcm` file added to `messages/types/`
-- [ ] Python types regenerated and `__init__.py` updated
-- [ ] Dart `.lcm` copy added to `dart/lib/messages/`
-- [ ] Channel constants added to all three languages (if applicable)
-- [ ] Integration tests pass: `PYTHONPATH=. pytest integration_tests/ -v`
-- [ ] Dart analysis clean: `cd dart && dart analyze`
+- [ ] Message types exist in C++, Python and Dart (if applicable)
+- [ ] Channel constants match in C++, Python and Dart (if applicable)
+- [ ] `python3 scripts/contract.py --write` was run and the result is committed
+- [ ] `ctest --test-dir build --output-on-failure` passes
+- [ ] Changes to the ring or `Transport` are covered by a test in `cpp/tests`
+- [ ] `cd dart && dart analyze` is clean

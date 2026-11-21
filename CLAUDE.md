@@ -2,10 +2,23 @@
 
 ## Project Overview
 
-raccoon-transport is a shared LCM (Lightweight Communications and Marshalling) transport library used across three robotics projects. It provides:
-1. All LCM message type definitions (replacing the `lcm-messages` git submodule)
-2. Channel definitions in C++, Dart, and Python
-3. A transport layer with optional at-least-once reliable delivery and retain (latest-value-on-subscribe)
+raccoon-transport is the messaging layer shared by the Raccoon components (raccoon-lib, stm32-data-reader, botui, raccoon-cli, raccoon-cam). It provides:
+1. The message types, written by hand in C++, Python and Dart (C++ defines the wire layout).
+2. The channel names in C++, Python and Dart.
+3. A shared-memory transport: one ring buffer file per channel under `/dev/shm`, no daemon.
+4. In the C++ transport: at-least-once delivery for commands (ACK and retransmit) and latest-value-on-subscribe (retain).
+5. A contract hash that lets every component check at startup that it speaks the same wire format.
+
+## How the transport works
+
+- Each channel is a file `/dev/shm/raccoon_ring_<channel>` (a `/` in the channel name is written as `_2F`). The first process that touches the channel creates the file: a reader creates an empty placeholder, a writer sets the size and writes the header (magic, version, slot count, slot size, `producer_seq`, channel name).
+- A channel has one writer and any number of readers. Only `__raccoon/ack` has several writers (every process that acknowledges a command); it is created with `rrb_writer_create_multi`.
+- The writer fills a slot, marks it with a sequence number and wakes parked readers through a futex word in the header. A reader copies a slot and checks the sequence number again afterwards (seqlock), so a slot that was overwritten during the copy is detected. A reader that falls a whole ring behind skips to the oldest intact slot.
+- The ring file never shrinks: readers may have the larger file mapped, and a page beyond a shortened end of file would raise SIGBUS in them. A reader checks that the header geometry fits the file before it uses a ring.
+- `rrb_reader_recv` reports a frame that does not fit the buffer as `RRB_RECV_TOO_BIG` and keeps it; `rrb_reader_skip` drops it. `raccoon::Transport` grows its receive buffer to the ring's payload size, so subscribers never see a cut-off frame.
+- `raccoon::Transport::shutdown()` wakes threads inside `spinOnce()` and waits (up to one second) for them before it closes the readers. `stop()` only ends `spin()`; the destructor releases everything.
+- A handler that throws does not stop the spin loop. The error is counted (`TransportStats::handlerErrors`), the first few per channel are printed to stderr, and `setHandlerErrorHandler` receives each one.
+- Use one thread per `Transport` for `spinOnce()`.
 
 ## Contract hash
 
@@ -23,15 +36,14 @@ and Dart (`dart/lib/src/contract.dart`). Every binary also carries the string
   file is stale or if the Python/Dart messages drifted from C++.
 - Tests: `python3 -m unittest scripts/test_contract.py`.
 - The release publishes `contract-hash.txt` and `contract.json` as assets.
-- Startup check: `contract/CHECK_SPEC.md` is the one description of the check
-  (decision table, messages, status files, exit code 78); `contract/check_vectors.json`
-  holds the test cases that the C++ (`ContractCheck.h`), Python
-  (`raccoon_transport/contract_check.py`) and Dart (`contract_check.dart`)
-  implementations all pass. Change the spec and the vectors first, then all three.
+- Startup check: the decision table is implemented identically in C++
+  (`cpp/src/ContractCheck.cpp`), Python (`raccoon_transport/contract_check.py`) and
+  Dart (`dart/lib/src/contract_check.dart`); the status files and exit code 78 are
+  defined there. `contract/check_vectors.json` holds the test cases that all three
+  implementations pass. Change the vectors first, then all three. The component
+  version check is described in `contract/COMPONENT_VERSION_CHECK.md`.
 - C++ parses the bundle file with the vendored nlohmann/json (MIT) in
   `cpp/third_party/nlohmann`; keep `LICENSE.MIT` and `THIRD_PARTY_NOTICES.md`.
-- The wire format is hand-written in each language; the `.lcm` / LCM sections
-  below are historical.
 
 ## Build Commands
 
@@ -48,13 +60,14 @@ Only `build.py` and `deploy.py` build and install the wheel; CI runs `build.py` 
 mkdir -p build && cd build
 cmake ..
 cmake --build . -j$(nproc)
+ctest --output-on-failure
 ```
 
 ### Dart:
 ```bash
 cd dart
 dart pub get
-dart run build_runner build  # Generate .g.dart from .lcm files
+dart analyze
 ```
 
 ### Python:
@@ -63,63 +76,43 @@ cd python
 pip install -e .
 ```
 
-### Regenerate Python LCM types:
-```bash
-./scripts/generate-python-types.sh
-```
-
 ### Integration Tests:
 ```bash
 # Prerequisites: build C++, Dart, and install Python package (see above)
 PYTHONPATH=. pytest integration_tests/ -v
-
-# Run a specific suite
-PYTHONPATH=. pytest integration_tests/test_cross_pubsub.py -v
-PYTHONPATH=. pytest integration_tests/test_message_compat.py -v
-PYTHONPATH=. pytest integration_tests/test_retain.py -v
-PYTHONPATH=. pytest integration_tests/test_stress.py -v
-
-# Filter by language
 PYTHONPATH=. pytest integration_tests/ -v -k "cpp"
 PYTHONPATH=. pytest integration_tests/ -v -k "dart"
 ```
+CI runs them without gating the release.
 
 ## Architecture
 
 ### Message Types
-- `messages/types/` — 11 `raccoon::` message types
-- `messages/protocol/` — `raccoon::` protocol types for reliability/retain
+- `messages/include/raccoon/*.hpp` and `messages/types/*.cpp` — the `raccoon::` message structs with hand-written `encode`/`decode` (big-endian, no fingerprint). The first field of every message is `int64_t timestamp`.
+- `messages/protocol/` — the protocol types for reliable delivery and retain.
+- `python/raccoon_transport/types/raccoon/` and `dart/lib/messages/types/*.g.dart` — the same layouts in Python and Dart (`contract.py --check` verifies them against C++).
+- Adding a type is described in `CONTRIBUTING.md`.
 
 ### C++ Library (`cpp/`)
-- `raccoon::Transport` — Main API (PIMPL pattern), wraps `lcm::LCM`
-- `raccoon::Channels` — All channel name definitions
-- `raccoon::LcmMessage` concept — Type constraint for LCM messages
-- Plain publish/subscribe = direct LCM call (zero overhead)
-- Reliable/retain features use `__raccoon/` control channels
+- `raccoon_ring.c` / `raccoon_ring.h` — the ring buffer (C API): writer, reader, futex wake, multi-channel wait.
+- `raccoon::Transport` — the public API (PIMPL): publish, subscribe, `spinOnce`, reliable delivery, retain, statistics.
+- `raccoon::Channels` — all channel names; `isCommandChannel` decides which channels are never deduplicated (a name ending in `_cmd` or containing `/cmd/`).
+- `cpp/bridge/` — a C library (`libraccoon_ring_bridge.so`) that the Dart package loads through FFI.
 
 ### Dart Package (`dart/`)
-- `RaccoonTransport` — Wraps the `Lcm` UDP client
-- Includes full LCM parser + Dart code generator (absorbed from lcm_dart)
-- `build_runner` generates `.g.dart` from `.lcm` files
+- `RaccoonRingTransport` (`lib/src/ring/transport.dart`) reaches the rings through the C bridge.
+- `lib/src/lcm/`, `lib/src/transport.dart` and `lib/src/reliable.dart` are a separate UDP-multicast client that does not use shared memory.
 
 ### Python Package (`python/`)
-- `Transport` — Wraps `lcm.LCM`
-- Pre-generated Python types in `raccoon_transport/types/exlcm/`
+- Message classes in `raccoon_transport/types/raccoon/` and the channel names in `channels.py`.
+- `raccoon_transport.Transport` is an in-process queue. It does not use shared memory and does not reach other processes. To talk to the robot from Python, use `raccoon.foundation.get_transport()` of raccoon-lib, which binds the C++ transport.
 
 ### C++ Interop Tools (`cpp/tools/`)
-- `interop_publish` / `interop_subscribe` — CLI tools with JSON event protocol
-- Used by integration tests to test C++ in cross-language scenarios
-- Built automatically with the C++ library
-
-### Integration Tests (`integration_tests/`)
-- 32 tests covering all 6 directional language pairs (Py/Dart/C++)
-- `helpers/dart_runner.py` — DartHelper subprocess manager
-- `helpers/cpp_runner.py` — CppHelper subprocess manager
-- Tests: cross-pubsub, message compat, retain protocol, stress/concurrency
+- `interop_publish` / `interop_subscribe` — CLI tools with a JSON event protocol, used by the integration tests.
 
 ### Channel Naming
-All channels follow pattern `raccoon/<device>/<property>`.
-Protocol channels use `__raccoon/` prefix.
+Channels follow the pattern `raccoon/<device>/<property>`.
+Protocol channels use the `__raccoon/` prefix.
 
 ## Consumer Integration
 

@@ -1,9 +1,9 @@
-/// Shared LCM transport library with channel definitions and optional reliable delivery
+/// Message classes and channel names of the raccoon transport, with access to the
+/// shared-memory rings (RaccoonRingTransport) and a separate UDP-multicast client.
 library raccoon_transport;
 
-// Core LCM functionality (migrated from lcm_dart). The standalone LCM
-// parser/generator + builder were removed in cc7d9e7 when message types
-// became hand-written; only the buffer + transport runtime remain.
+// Message buffer and the UDP-multicast client. The message classes are written by
+// hand (big-endian, no fingerprint); the UDP client does not use shared memory.
 export 'src/lcm/lcm_buffer.dart';
 export 'src/lcm/lcm.dart';
 
@@ -13,10 +13,9 @@ export 'src/contract.dart';
 export 'src/contract_check.dart';
 export 'src/transport.dart';
 
-// raccoon_ring SHM transport — Dart FFI bridge around the in-tree
-// raccoon_ring (cpp/src/raccoon_ring.c). Use this on Flutter/Dart
-// clients that need zero-copy SHM IPC with the C++/Python sides of
-// raccoon-transport instead of going over UDP-LCM.
+// raccoon_ring SHM transport — Dart FFI bridge around raccoon_ring
+// (cpp/src/raccoon_ring.c). Use this on Flutter/Dart clients that talk to the
+// C++ components (stm32-data-reader, raccoon-lib) through shared memory.
 //
 // Requires libraccoon_ring_bridge.so on the dlopen() search path. Build
 // it via cpp/bridge/build.sh (cross-compiles for aarch64 Pi by default).

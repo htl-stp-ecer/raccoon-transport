@@ -1,4 +1,5 @@
-/// Startup check of the transport contract. Semantics: contract/CHECK_SPEC.md.
+/// Startup check of the transport contract. The C++ and Python implementations
+/// behave identically; contract/check_vectors.json holds the cases all three pass.
 ///
 /// Call [startupCheck] once when the app starts. The result is written to a
 /// status file (not over the transport) and, when [ContractCheckResult.refuse]

@@ -2,7 +2,8 @@
 
 Not part of raccoon-transport's code: **each component implements it itself** (raccoon-lib and
 the Pi server in Python, the STM reader in C++, the Bot UI in Dart) and hands the result to the
-startup check as a *component check* (see `CHECK_SPEC.md`). This file only says what they all do,
+startup check as a *component check* (see the startup check in `cpp/src/ContractCheck.cpp`,
+`python/raccoon_transport/contract_check.py` and `dart/lib/src/contract_check.dart`). This file only says what they all do,
 so that they behave the same.
 
 ## What it checks

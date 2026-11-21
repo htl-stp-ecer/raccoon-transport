@@ -24,8 +24,8 @@
 
 - the message definitions, written by hand in C++ under `messages/`
 - a C++ transport library with retain and reliable-delivery support
-- a Python transport package with matching message classes
-- a Dart package with its own transport and matching message classes
+- a Python package with matching message classes and channel names
+- a Dart package with matching message classes and access to the shared-memory rings through a C bridge
 - a contract hash that lets every component check at startup that it speaks the same wire format
 
 This package is best treated as a small monorepo rather than a single library.
@@ -77,23 +77,25 @@ dependencies:
 
 ## Quick Start (Python)
 
+The Python package carries the message classes and the channel names. A message is encoded to the bytes that go on the wire and decoded from them:
+
 ```python
-from raccoon_transport import Transport, Channels
+from raccoon_transport import Channels
 from raccoon_transport.types.raccoon import scalar_i32_t
 
-t = Transport()
+cmd = scalar_i32_t(timestamp=0, value=50)
+payload = cmd.encode()                      # bytes for Channels.motor_power_command(0)
 
-# Subscribe to sensor data
-def on_motor_position(channel, data):
-    msg = scalar_i32_t.decode(data)
-    print(f"Motor position: {msg.value}")
+msg = scalar_i32_t.decode(payload)
+print(msg.value)                            # 50
+```
 
-t.subscribe(Channels.motor_position(0), on_motor_position)
+`raccoon_transport.Transport` is an in-process message queue (for tests). It does not use shared memory and does not reach other processes. A Python program that talks to the robot uses the C++ transport through raccoon-lib:
 
-# Publish a command
-cmd = scalar_i32_t()
-cmd.value = 50
-t.publish(Channels.motor_power_command(0), cmd.encode())
+```python
+from raccoon.foundation import get_transport
+
+transport = get_transport()
 ```
 
 ---
@@ -160,9 +162,11 @@ PYTHONPATH=. pytest integration_tests/test_stress.py -v
 
 ### Transport Layer
 
-- **Plain publish/subscribe** — one file per channel under `/dev/shm/` (`raccoon_ring`, a single-producer multi-consumer ring buffer), no daemon
-- **Reliable delivery** — at-least-once with acknowledgement protocol via `__raccoon/` control channels
-- **Retain** — latest-value-on-subscribe, so new subscribers immediately get the most recent message
+- **Plain publish/subscribe** — one file per channel, `/dev/shm/raccoon_ring_<channel>` (`raccoon_ring`, a ring buffer with one writer and any number of readers), no daemon. A reader parks on a futex and is woken when a frame is published. The ring file never shrinks, and a reader checks that the ring fits its file before it uses it.
+- **Reliable delivery** (C++) — at-least-once for commands: the publisher re-sends until the subscriber acknowledges on `__raccoon/ack`, the subscriber delivers each command once. A command that is never acknowledged is reported through `setReliableEventHandler` and counted in `TransportStats::reliableDropped`.
+- **Retain** (C++) — latest-value-on-subscribe, so a new subscriber immediately gets the most recent frame of the ring.
+- **Lifecycle** — `shutdown()` waits for threads inside `spinOnce()` before it closes the readers, and the destructor releases everything even after `stop()`. A handler that throws is counted (`TransportStats::handlerErrors`), reported through `setHandlerErrorHandler` and does not stop the other handlers.
+- **Frame size** — the receive buffer grows to the ring's payload size, so a subscriber never gets a cut-off frame.
 
 ### Channel Naming
 
@@ -189,8 +193,8 @@ Defined in `messages/types/` under the `raccoon` namespace. The wire format is w
 ### Language-Specific Notes
 
 - **C++**: Message structs live in `messages/`, the transport library in `cpp/`. Transport uses the PIMPL pattern.
-- **Dart**: Has its own transport and message classes under `dart/lib/`. No code generation step.
-- **Python**: Message classes in `python/raccoon_transport/types/raccoon/`, transport in `python/raccoon_transport/`.
+- **Dart**: Message classes in `dart/lib/messages/` (written by hand, no code generation). `RaccoonRingTransport` reaches the rings through `libraccoon_ring_bridge.so`, built with `cpp/bridge/build.sh`. The package also contains a separate UDP-multicast client (`lib/src/lcm/`, `lib/src/transport.dart`) that does not use shared memory.
+- **Python**: Message classes in `python/raccoon_transport/types/raccoon/`, channel names in `python/raccoon_transport/channels.py`. `raccoon_transport.Transport` is an in-process queue.
 
 ---
 

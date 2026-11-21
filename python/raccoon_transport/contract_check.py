@@ -1,4 +1,5 @@
-"""Startup check of the transport contract. Semantics: ``contract/CHECK_SPEC.md``.
+"""Startup check of the transport contract. The C++ and Dart implementations behave
+identically; ``contract/check_vectors.json`` holds the cases all three pass.
 
 Every component runs :func:`startup_check` once when it starts. The result goes
 to a status file (never over the transport, which may be the thing that is

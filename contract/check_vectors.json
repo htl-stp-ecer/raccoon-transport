@@ -1,5 +1,5 @@
 {
-  "about": "Cases every implementation of the contract check must pass. See CHECK_SPEC.md.",
+  "about": "Cases every implementation of the contract check (C++, Python, Dart) must pass.",
   "defaults": {
     "component": "stm32-data-reader",
     "component_version": "v58",

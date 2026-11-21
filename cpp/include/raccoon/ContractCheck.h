@@ -1,5 +1,7 @@
 #pragma once
-// Startup check of the transport contract. Semantics: contract/CHECK_SPEC.md.
+// Startup check of the transport contract. The Python (contract_check.py) and Dart
+// (contract_check.dart) implementations behave identically; contract/check_vectors.json
+// holds the cases all three pass.
 //
 // A component calls startupCheck() once at start. The result is written to a
 // status file (not over the transport) and, when refuseStart() is true, the

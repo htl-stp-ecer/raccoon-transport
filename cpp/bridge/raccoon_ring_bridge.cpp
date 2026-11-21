@@ -1,14 +1,9 @@
 // raccoon_ring_bridge.cpp — Dart FFI shim around raccoon_ring (the
-// SHM ring buffer transport from raccoon-transport).
+// shared-memory ring buffer transport from raccoon-transport).
 //
-// History: this was originally a thin pure-C wrapper around the iceoryx2
-// C API; then a C++ wrapper around raccoon::Transport (which itself
-// wrapped iceoryx2); now a direct wrapper around raccoon_ring. Each
-// step gained reliability — the iceoryx2 backend reproducibly broke
-// new-node creation on the Pi once the reader had ~100 publishers open,
-// and frames sporadically didn't reach subscribers. raccoon_ring is a
-// fileless-per-channel SHM ring buffer: no daemon, no service
-// descriptors, no state machine to wedge.
+// One file per channel under /dev/shm, no daemon. The bridge opens writers and
+// readers for Dart, runs a polling thread that queues incoming frames, and applies
+// raccoon::dedup to publishes.
 
 #include "raccoon_ring_bridge.h"
 #include "raccoon/Dedup.h"
