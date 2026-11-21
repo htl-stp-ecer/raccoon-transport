@@ -47,7 +47,7 @@ and Dart (`dart/lib/src/contract.dart`). Every binary also carries the string
 
 ## Channel table
 
-`channels.yml` is the list of every channel with its message type and the properties of its ring. `scripts/channels.py --write` generates `cpp/include/raccoon/ChannelTable.h` from it (`--check` runs in CI and in `build.py`). The slot size of a fixed-size message type follows from the type, other types carry a `max_payload` in the table.
+`channels.yml` is the list of every channel with its message type and the properties of its ring. `scripts/channels.py --write` generates `cpp/include/raccoon/ChannelTable.h`, `python/raccoon_transport/channel_table.py` and `dart/lib/src/channel_table.dart` from it (`--check` runs in CI and in `build.py`). A channel is named by its path in every language, for example `channels::hardware::motor::cmd::power(port)` in C++ and `channels.hardware.motor.cmd.power(port)` in Python and Dart. The slot size of a fixed-size message type follows from the type, other types carry a `max_payload` in the table.
 
 ## Build Commands
 

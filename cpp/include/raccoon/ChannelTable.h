@@ -3,6 +3,10 @@
 // Every channel of the transport with the properties of its ring. The slot
 // payload of a fixed-size type is the encoded size of the type, for the other
 // types it is the limit from the table.
+//
+// A channel is named by its path: hardware/motor/{port}/cmd/power is
+// channels::hardware::motor::cmd::power(port), hardware/imu/state/gyro is
+// channels::hardware::imu::state::GYRO.
 #pragma once
 
 #include <cstddef>
@@ -219,134 +223,283 @@ namespace raccoon::channels
     constexpr uint64_t slot_stride(uint32_t payload) noexcept
     { return (uint64_t{16} + payload + 63) / 64 * 64; }
 
-    // Channels without a port.
-    inline constexpr std::string_view HARDWARE_IMU_STATE_GYRO = "hardware/imu/state/gyro";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_ACCEL = "hardware/imu/state/accel";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_MAG = "hardware/imu/state/mag";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_LINEAR_ACCEL = "hardware/imu/state/linear_accel";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_ACCEL_VELOCITY = "hardware/imu/state/accel_velocity";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_QUATERNION = "hardware/imu/state/quaternion";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_HEADING = "hardware/imu/state/heading";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_TEMPERATURE = "hardware/imu/state/temperature";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_GYRO_ACCURACY = "hardware/imu/state/gyro_accuracy";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_ACCEL_ACCURACY = "hardware/imu/state/accel_accuracy";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_MAG_ACCURACY = "hardware/imu/state/mag_accuracy";
-    inline constexpr std::string_view HARDWARE_IMU_STATE_QUATERNION_ACCURACY = "hardware/imu/state/quaternion_accuracy";
-    inline constexpr std::string_view HARDWARE_BATTERY_STATE_VOLTAGE = "hardware/battery/state/voltage";
-    inline constexpr std::string_view HARDWARE_CHASSIS_CMD_VELOCITY = "hardware/chassis/cmd/velocity";
-    inline constexpr std::string_view HARDWARE_CHASSIS_CMD_STOP = "hardware/chassis/cmd/stop";
-    inline constexpr std::string_view HARDWARE_ODOMETRY_STATE_POS_X = "hardware/odometry/state/pos_x";
-    inline constexpr std::string_view HARDWARE_ODOMETRY_STATE_POS_Y = "hardware/odometry/state/pos_y";
-    inline constexpr std::string_view HARDWARE_ODOMETRY_STATE_HEADING = "hardware/odometry/state/heading";
-    inline constexpr std::string_view HARDWARE_ODOMETRY_STATE_VX = "hardware/odometry/state/vx";
-    inline constexpr std::string_view HARDWARE_ODOMETRY_STATE_VY = "hardware/odometry/state/vy";
-    inline constexpr std::string_view HARDWARE_ODOMETRY_STATE_WZ = "hardware/odometry/state/wz";
-    inline constexpr std::string_view HARDWARE_ODOMETRY_CMD_RESET = "hardware/odometry/cmd/reset";
-    inline constexpr std::string_view HARDWARE_KINEMATICS_CMD_CONFIG = "hardware/kinematics/cmd/config";
-    inline constexpr std::string_view HARDWARE_LATCH_CMD_ENGAGED = "hardware/latch/cmd/engaged";
-    inline constexpr std::string_view HARDWARE_LATCH_STATE_FLAGS = "hardware/latch/state/flags";
-    inline constexpr std::string_view HARDWARE_WATCHDOG_CMD_HEARTBEAT = "hardware/watchdog/cmd/heartbeat";
-    inline constexpr std::string_view HARDWARE_FEATURE_CMD_BEMF_ACTIVE = "hardware/feature/cmd/bemf_active";
-    inline constexpr std::string_view HARDWARE_FEATURE_STATE_BEMF_ACTIVE = "hardware/feature/state/bemf_active";
-    inline constexpr std::string_view SYSTEM_STATE_CPU_TEMPERATURE = "system/state/cpu_temperature";
-    inline constexpr std::string_view MESSAGES_ERROR = "messages/error";
-    inline constexpr std::string_view MESSAGES_WARN = "messages/warn";
-    inline constexpr std::string_view PROTOCOL_ACK = "protocol/ack";
-    inline constexpr std::string_view UI_SCREEN_RENDER = "ui/screen/render";
-    inline constexpr std::string_view UI_SCREEN_ANSWER = "ui/screen/answer";
-    inline constexpr std::string_view CAMERA_STATE_FRAME = "camera/state/frame";
-    inline constexpr std::string_view CAMERA_STATE_DETECTIONS = "camera/state/detections";
-    inline constexpr std::string_view CAMERA_CMD_REQUEST = "camera/cmd/request";
-    inline constexpr std::string_view CAMERA_RESPONSE = "camera/response";
-    inline constexpr std::string_view CAMERA_STATE_STATUS = "camera/state/status";
-    inline constexpr std::string_view CAMERA_STATE_ERROR = "camera/state/error";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_ACCEL = "hardware/calib_board/icm/state/accel";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_GYRO = "hardware/calib_board/icm/state/gyro";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_GYRO_CORRECTED = "hardware/calib_board/icm/state/gyro_corrected";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_GYRO_BIAS = "hardware/calib_board/icm/state/gyro_bias";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_TEMPERATURE = "hardware/calib_board/icm/state/temperature";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_QUAT_W = "hardware/calib_board/icm/state/quat_w";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_QUAT_X = "hardware/calib_board/icm/state/quat_x";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_QUAT_Y = "hardware/calib_board/icm/state/quat_y";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_QUAT_Z = "hardware/calib_board/icm/state/quat_z";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_EULER_ROLL = "hardware/calib_board/icm/state/euler_roll";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_EULER_PITCH = "hardware/calib_board/icm/state/euler_pitch";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_EULER_YAW = "hardware/calib_board/icm/state/euler_yaw";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_AT_REST = "hardware/calib_board/icm/state/at_rest";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_STATE_BIAS_PERSISTED = "hardware/calib_board/icm/state/bias_persisted";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_DELTA_X = "hardware/calib_board/paa/state/delta_x";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_DELTA_Y = "hardware/calib_board/paa/state/delta_y";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_SQUAL = "hardware/calib_board/paa/state/squal";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_SHUTTER = "hardware/calib_board/paa/state/shutter";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_MOTION = "hardware/calib_board/paa/state/motion";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_ACC_X = "hardware/calib_board/paa/state/acc_x";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_ACC_Y = "hardware/calib_board/paa/state/acc_y";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CAL_CX_PER_CM = "hardware/calib_board/paa/state/cal_cx_per_cm";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CAL_CY_PER_CM = "hardware/calib_board/paa/state/cal_cy_per_cm";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CAL_HEIGHT_MM = "hardware/calib_board/paa/state/cal_height_mm";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CAL_OFF_X_MM = "hardware/calib_board/paa/state/cal_off_x_mm";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CAL_OFF_Y_MM = "hardware/calib_board/paa/state/cal_off_y_mm";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CAL_VALID = "hardware/calib_board/paa/state/cal_valid";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CM_DX = "hardware/calib_board/paa/state/cm_dx";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CM_DY = "hardware/calib_board/paa/state/cm_dy";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CM_POS_X = "hardware/calib_board/paa/state/cm_pos_x";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_STATE_CM_POS_Y = "hardware/calib_board/paa/state/cm_pos_y";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ODOM_STATE_POS_X = "hardware/calib_board/odom/state/pos_x";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ODOM_STATE_POS_Y = "hardware/calib_board/odom/state/pos_y";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ODOM_STATE_HEADING = "hardware/calib_board/odom/state/heading";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_STATE_BOARD = "hardware/calib_board/state/board";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_STATE_PORT = "hardware/calib_board/state/port";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_STATE_ICM = "hardware/calib_board/state/icm";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_STATE_PAA = "hardware/calib_board/state/paa";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_STATE_STATS = "hardware/calib_board/state/stats";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_CMD_SET_CALIBRATION = "hardware/calib_board/paa/cmd/set_calibration";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_CMD_SET_OFFSET = "hardware/calib_board/paa/cmd/set_offset";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_PAA_CMD_RESET_POSITION = "hardware/calib_board/paa/cmd/reset_position";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_CMD_SAVE_GYRO_BIAS = "hardware/calib_board/icm/cmd/save_gyro_bias";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ICM_CMD_RESET_GYRO_BIAS = "hardware/calib_board/icm/cmd/reset_gyro_bias";
-    inline constexpr std::string_view HARDWARE_CALIB_BOARD_ODOM_CMD_RESET = "hardware/calib_board/odom/cmd/reset";
-
-    // Channels of a port range: the name for a port, or an empty view when the port is out of range.
-    constexpr std::string_view hardware_analog_state_value(int port) noexcept
-    { return port < 0 || port > 5 ? std::string_view{} : CHANNEL_TABLE[13 + (port - 0)].name; }
-    constexpr std::string_view hardware_digital_state_value(int port) noexcept
-    { return port < 0 || port > 10 ? std::string_view{} : CHANNEL_TABLE[19 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_state_power(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[30 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_state_position(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[34 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_state_bemf(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[38 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_cmd_power(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[42 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_cmd_velocity(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[46 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_cmd_mode(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[50 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_cmd_stop(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[54 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_cmd_position(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[58 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_cmd_pid(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[62 + (port - 0)].name; }
-    constexpr std::string_view hardware_motor_cmd_reset_position(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[66 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_state_mode(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[70 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_state_position(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[74 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_state_feedback(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[78 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_state_health(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[82 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_state_done(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[86 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_cmd_position(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[90 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_cmd_mode(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[94 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_cmd_smooth(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[98 + (port - 0)].name; }
-    constexpr std::string_view hardware_servo_cmd_velocity(int port) noexcept
-    { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[102 + (port - 0)].name; }
+    // The channels by path. A channel of a port range is a function of the port that
+    // returns the name, or an empty name for a port outside the range.
+    namespace hardware
+    {
+        namespace imu
+        {
+            namespace state
+            {
+                inline constexpr std::string_view GYRO = "hardware/imu/state/gyro";
+                inline constexpr std::string_view ACCEL = "hardware/imu/state/accel";
+                inline constexpr std::string_view MAG = "hardware/imu/state/mag";
+                inline constexpr std::string_view LINEAR_ACCEL = "hardware/imu/state/linear_accel";
+                inline constexpr std::string_view ACCEL_VELOCITY = "hardware/imu/state/accel_velocity";
+                inline constexpr std::string_view QUATERNION = "hardware/imu/state/quaternion";
+                inline constexpr std::string_view HEADING = "hardware/imu/state/heading";
+                inline constexpr std::string_view TEMPERATURE = "hardware/imu/state/temperature";
+                inline constexpr std::string_view GYRO_ACCURACY = "hardware/imu/state/gyro_accuracy";
+                inline constexpr std::string_view ACCEL_ACCURACY = "hardware/imu/state/accel_accuracy";
+                inline constexpr std::string_view MAG_ACCURACY = "hardware/imu/state/mag_accuracy";
+                inline constexpr std::string_view QUATERNION_ACCURACY = "hardware/imu/state/quaternion_accuracy";
+            }
+        }
+        namespace battery
+        {
+            namespace state
+            {
+                inline constexpr std::string_view VOLTAGE = "hardware/battery/state/voltage";
+            }
+        }
+        namespace analog
+        {
+            namespace state
+            {
+                constexpr std::string_view value(int port) noexcept
+                { return port < 0 || port > 5 ? std::string_view{} : CHANNEL_TABLE[13 + (port - 0)].name; }
+            }
+        }
+        namespace digital
+        {
+            namespace state
+            {
+                constexpr std::string_view value(int port) noexcept
+                { return port < 0 || port > 10 ? std::string_view{} : CHANNEL_TABLE[19 + (port - 0)].name; }
+            }
+        }
+        namespace motor
+        {
+            namespace state
+            {
+                constexpr std::string_view power(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[30 + (port - 0)].name; }
+                constexpr std::string_view position(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[34 + (port - 0)].name; }
+                constexpr std::string_view bemf(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[38 + (port - 0)].name; }
+            }
+            namespace cmd
+            {
+                constexpr std::string_view power(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[42 + (port - 0)].name; }
+                constexpr std::string_view velocity(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[46 + (port - 0)].name; }
+                constexpr std::string_view mode(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[50 + (port - 0)].name; }
+                constexpr std::string_view stop(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[54 + (port - 0)].name; }
+                constexpr std::string_view position(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[58 + (port - 0)].name; }
+                constexpr std::string_view pid(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[62 + (port - 0)].name; }
+                constexpr std::string_view reset_position(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[66 + (port - 0)].name; }
+            }
+        }
+        namespace servo
+        {
+            namespace state
+            {
+                constexpr std::string_view mode(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[70 + (port - 0)].name; }
+                constexpr std::string_view position(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[74 + (port - 0)].name; }
+                constexpr std::string_view feedback(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[78 + (port - 0)].name; }
+                constexpr std::string_view health(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[82 + (port - 0)].name; }
+                constexpr std::string_view done(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[86 + (port - 0)].name; }
+            }
+            namespace cmd
+            {
+                constexpr std::string_view position(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[90 + (port - 0)].name; }
+                constexpr std::string_view mode(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[94 + (port - 0)].name; }
+                constexpr std::string_view smooth(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[98 + (port - 0)].name; }
+                constexpr std::string_view velocity(int port) noexcept
+                { return port < 0 || port > 3 ? std::string_view{} : CHANNEL_TABLE[102 + (port - 0)].name; }
+            }
+        }
+        namespace chassis
+        {
+            namespace cmd
+            {
+                inline constexpr std::string_view VELOCITY = "hardware/chassis/cmd/velocity";
+                inline constexpr std::string_view STOP = "hardware/chassis/cmd/stop";
+            }
+        }
+        namespace odometry
+        {
+            namespace state
+            {
+                inline constexpr std::string_view POS_X = "hardware/odometry/state/pos_x";
+                inline constexpr std::string_view POS_Y = "hardware/odometry/state/pos_y";
+                inline constexpr std::string_view HEADING = "hardware/odometry/state/heading";
+                inline constexpr std::string_view VX = "hardware/odometry/state/vx";
+                inline constexpr std::string_view VY = "hardware/odometry/state/vy";
+                inline constexpr std::string_view WZ = "hardware/odometry/state/wz";
+            }
+            namespace cmd
+            {
+                inline constexpr std::string_view RESET = "hardware/odometry/cmd/reset";
+            }
+        }
+        namespace kinematics
+        {
+            namespace cmd
+            {
+                inline constexpr std::string_view CONFIG = "hardware/kinematics/cmd/config";
+            }
+        }
+        namespace latch
+        {
+            namespace cmd
+            {
+                inline constexpr std::string_view ENGAGED = "hardware/latch/cmd/engaged";
+            }
+            namespace state
+            {
+                inline constexpr std::string_view FLAGS = "hardware/latch/state/flags";
+            }
+        }
+        namespace watchdog
+        {
+            namespace cmd
+            {
+                inline constexpr std::string_view HEARTBEAT = "hardware/watchdog/cmd/heartbeat";
+            }
+        }
+        namespace feature
+        {
+            namespace cmd
+            {
+                inline constexpr std::string_view BEMF_ACTIVE = "hardware/feature/cmd/bemf_active";
+            }
+            namespace state
+            {
+                inline constexpr std::string_view BEMF_ACTIVE = "hardware/feature/state/bemf_active";
+            }
+        }
+        namespace calib_board
+        {
+            namespace icm
+            {
+                namespace state
+                {
+                    inline constexpr std::string_view ACCEL = "hardware/calib_board/icm/state/accel";
+                    inline constexpr std::string_view GYRO = "hardware/calib_board/icm/state/gyro";
+                    inline constexpr std::string_view GYRO_CORRECTED = "hardware/calib_board/icm/state/gyro_corrected";
+                    inline constexpr std::string_view GYRO_BIAS = "hardware/calib_board/icm/state/gyro_bias";
+                    inline constexpr std::string_view TEMPERATURE = "hardware/calib_board/icm/state/temperature";
+                    inline constexpr std::string_view QUAT_W = "hardware/calib_board/icm/state/quat_w";
+                    inline constexpr std::string_view QUAT_X = "hardware/calib_board/icm/state/quat_x";
+                    inline constexpr std::string_view QUAT_Y = "hardware/calib_board/icm/state/quat_y";
+                    inline constexpr std::string_view QUAT_Z = "hardware/calib_board/icm/state/quat_z";
+                    inline constexpr std::string_view EULER_ROLL = "hardware/calib_board/icm/state/euler_roll";
+                    inline constexpr std::string_view EULER_PITCH = "hardware/calib_board/icm/state/euler_pitch";
+                    inline constexpr std::string_view EULER_YAW = "hardware/calib_board/icm/state/euler_yaw";
+                    inline constexpr std::string_view AT_REST = "hardware/calib_board/icm/state/at_rest";
+                    inline constexpr std::string_view BIAS_PERSISTED = "hardware/calib_board/icm/state/bias_persisted";
+                }
+                namespace cmd
+                {
+                    inline constexpr std::string_view SAVE_GYRO_BIAS = "hardware/calib_board/icm/cmd/save_gyro_bias";
+                    inline constexpr std::string_view RESET_GYRO_BIAS = "hardware/calib_board/icm/cmd/reset_gyro_bias";
+                }
+            }
+            namespace paa
+            {
+                namespace state
+                {
+                    inline constexpr std::string_view DELTA_X = "hardware/calib_board/paa/state/delta_x";
+                    inline constexpr std::string_view DELTA_Y = "hardware/calib_board/paa/state/delta_y";
+                    inline constexpr std::string_view SQUAL = "hardware/calib_board/paa/state/squal";
+                    inline constexpr std::string_view SHUTTER = "hardware/calib_board/paa/state/shutter";
+                    inline constexpr std::string_view MOTION = "hardware/calib_board/paa/state/motion";
+                    inline constexpr std::string_view ACC_X = "hardware/calib_board/paa/state/acc_x";
+                    inline constexpr std::string_view ACC_Y = "hardware/calib_board/paa/state/acc_y";
+                    inline constexpr std::string_view CAL_CX_PER_CM = "hardware/calib_board/paa/state/cal_cx_per_cm";
+                    inline constexpr std::string_view CAL_CY_PER_CM = "hardware/calib_board/paa/state/cal_cy_per_cm";
+                    inline constexpr std::string_view CAL_HEIGHT_MM = "hardware/calib_board/paa/state/cal_height_mm";
+                    inline constexpr std::string_view CAL_OFF_X_MM = "hardware/calib_board/paa/state/cal_off_x_mm";
+                    inline constexpr std::string_view CAL_OFF_Y_MM = "hardware/calib_board/paa/state/cal_off_y_mm";
+                    inline constexpr std::string_view CAL_VALID = "hardware/calib_board/paa/state/cal_valid";
+                    inline constexpr std::string_view CM_DX = "hardware/calib_board/paa/state/cm_dx";
+                    inline constexpr std::string_view CM_DY = "hardware/calib_board/paa/state/cm_dy";
+                    inline constexpr std::string_view CM_POS_X = "hardware/calib_board/paa/state/cm_pos_x";
+                    inline constexpr std::string_view CM_POS_Y = "hardware/calib_board/paa/state/cm_pos_y";
+                }
+                namespace cmd
+                {
+                    inline constexpr std::string_view SET_CALIBRATION = "hardware/calib_board/paa/cmd/set_calibration";
+                    inline constexpr std::string_view SET_OFFSET = "hardware/calib_board/paa/cmd/set_offset";
+                    inline constexpr std::string_view RESET_POSITION = "hardware/calib_board/paa/cmd/reset_position";
+                }
+            }
+            namespace odom
+            {
+                namespace state
+                {
+                    inline constexpr std::string_view POS_X = "hardware/calib_board/odom/state/pos_x";
+                    inline constexpr std::string_view POS_Y = "hardware/calib_board/odom/state/pos_y";
+                    inline constexpr std::string_view HEADING = "hardware/calib_board/odom/state/heading";
+                }
+                namespace cmd
+                {
+                    inline constexpr std::string_view RESET = "hardware/calib_board/odom/cmd/reset";
+                }
+            }
+            namespace state
+            {
+                inline constexpr std::string_view BOARD = "hardware/calib_board/state/board";
+                inline constexpr std::string_view PORT = "hardware/calib_board/state/port";
+                inline constexpr std::string_view ICM = "hardware/calib_board/state/icm";
+                inline constexpr std::string_view PAA = "hardware/calib_board/state/paa";
+                inline constexpr std::string_view STATS = "hardware/calib_board/state/stats";
+            }
+        }
+    }
+    namespace system
+    {
+        namespace state
+        {
+            inline constexpr std::string_view CPU_TEMPERATURE = "system/state/cpu_temperature";
+        }
+    }
+    namespace messages
+    {
+        inline constexpr std::string_view ERROR = "messages/error";
+        inline constexpr std::string_view WARN = "messages/warn";
+    }
+    namespace protocol
+    {
+        inline constexpr std::string_view ACK = "protocol/ack";
+    }
+    namespace ui
+    {
+        namespace screen
+        {
+            inline constexpr std::string_view RENDER = "ui/screen/render";
+            inline constexpr std::string_view ANSWER = "ui/screen/answer";
+        }
+    }
+    namespace camera
+    {
+        namespace state
+        {
+            inline constexpr std::string_view FRAME = "camera/state/frame";
+            inline constexpr std::string_view DETECTIONS = "camera/state/detections";
+            inline constexpr std::string_view STATUS = "camera/state/status";
+            inline constexpr std::string_view ERROR = "camera/state/error";
+        }
+        namespace cmd
+        {
+            inline constexpr std::string_view REQUEST = "camera/cmd/request";
+        }
+        inline constexpr std::string_view RESPONSE = "camera/response";
+    }
 }

@@ -1,6 +1,7 @@
 """Tests for scripts/channels.py and channels.yml."""
 import importlib.util
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -43,9 +44,63 @@ class TableFileTests(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
         self.assertGreater(len(names), 100)
 
-    def test_generated_header_is_up_to_date(self):
-        channels, ranges = tool.expand(self.document, tool.type_sizes(self.contract))
-        self.assertEqual(tool.cpp_header(channels, ranges), tool.CPP_HEADER.read_text(encoding="utf-8"))
+    def test_generated_files_are_up_to_date(self):
+        channels, leaves = tool.expand(self.document, tool.type_sizes(self.contract))
+        for path, render in tool.GENERATED:
+            with self.subTest(path.name):
+                self.assertEqual(render(channels, leaves), path.read_text(encoding="utf-8"))
+
+    def test_generated_python_names_every_channel_by_its_path(self):
+        module_spec = importlib.util.spec_from_file_location("channel_table_generated", tool.PY_MODULE)
+        generated = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(generated)
+        channels = generated.channels
+        self.assertEqual(channels.hardware.imu.state.GYRO, "hardware/imu/state/gyro")
+        self.assertEqual(channels.hardware.latch.cmd.ENGAGED, "hardware/latch/cmd/engaged")
+        self.assertEqual(channels.messages.ERROR, "messages/error")
+        self.assertEqual(channels.camera.state.FRAME, "camera/state/frame")
+        self.assertEqual(channels.hardware.motor.cmd.power(2), "hardware/motor/2/cmd/power")
+        self.assertEqual(channels.hardware.digital.state.value(10), "hardware/digital/10/state/value")
+        for bad_port in (4, -1, True, "1", None):
+            with self.assertRaises(ValueError):
+                channels.hardware.motor.cmd.power(bad_port)
+        with self.assertRaises(ValueError):
+            channels.hardware.digital.state.value(11)
+
+    def test_generated_python_and_dart_cover_every_table_channel(self):
+        parsed, _ = tool.expand(self.document, tool.type_sizes(self.contract))
+        module_spec = importlib.util.spec_from_file_location("channel_table_generated2", tool.PY_MODULE)
+        generated = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(generated)
+
+        def collect(cls, found):
+            for name, value in vars(cls).items():
+                if name.startswith("_"):
+                    continue
+                if isinstance(value, type):
+                    collect(value, found)
+                elif isinstance(value, str):
+                    found.add(value)
+                elif isinstance(value, staticmethod):
+                    for port in range(0, 11):
+                        try:
+                            found.add(value.__func__(port))
+                        except ValueError:
+                            pass
+            return found
+
+        names = collect(generated.channels, set())
+        self.assertEqual(names, {c.name for c in parsed})
+
+    def test_generated_dart_is_well_formed(self):
+        text = tool.DART_MODULE.read_text(encoding="utf-8")
+        self.assertEqual(text.count("{"), text.count("}"))
+        defined = set(re.findall(r"^class (\w+) \{", text, re.M))
+        used = set(re.findall(r"const (_\w+)\(\)", text)) - {"_Channels"} | {"_Channels"}
+        self.assertLessEqual(used, defined)
+        self.assertIn("channels.hardware.motor.cmd.power(port)", text)
+        self.assertIn("String get gyro => 'hardware/imu/state/gyro';", text)
+        self.assertIn("String power(int port) => _port('hardware/motor/{port}/cmd/power', port, 0, 3);", text)
 
     def test_fixed_sizes_follow_the_message_types(self):
         sizes = tool.type_sizes(self.contract)
@@ -113,11 +168,32 @@ class ExpandTests(unittest.TestCase):
             "unknown field": entry(color="red"),
             "missing doc": {"name": "a/b", "type": "scalar_i32_t"},
             "reliable that is not a boolean": entry(reliable="yes"),
+            "placeholder inside a segment": entry(name="m/p{port}/c", ports="0..1"),
         }
         for label, bad in cases.items():
             with self.subTest(label):
                 with self.assertRaises(tool.TableError):
                     expand(bad)
+
+    def test_rejects_names_that_clash_in_a_language(self):
+        def tree(*names):
+            channels, leaves = expand(*[entry(name=n) for n in names])
+            return tool.build_tree(leaves)
+        for label, names in {
+            "a channel below another channel": ("a/b", "a/b/c"),
+            "a segment that is a reserved word": ("a/class/c",),
+            "a segment that starts with a digit": ("a/0/c",),
+            "two names that are one in Dart": ("a/b_c/x", "a/bC/y"),
+        }.items():
+            with self.subTest(label):
+                with self.assertRaises(tool.TableError):
+                    tree(*names)
+
+    def test_a_port_range_is_a_function_below_the_path_without_the_port(self):
+        _, leaves = expand(entry(name="m/{port}/cmd/p", ports="0..3"), entry(name="m/{port}/state/p", ports="0..3"))
+        tree = tool.build_tree(leaves)
+        self.assertEqual(list(tree.children["m"].children), ["cmd", "state"])
+        self.assertEqual(tree.children["m"].children["cmd"].children["p"].leaf.high, 3)
 
     def test_rejects_duplicates(self):
         with self.assertRaises(tool.TableError):

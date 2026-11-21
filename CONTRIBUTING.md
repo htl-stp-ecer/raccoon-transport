@@ -80,10 +80,10 @@ Run `python3 scripts/contract.py --write` afterwards.
 
 ### The channel table
 
-`channels.yml` lists every channel with its message type and the properties of its ring (`reliable`, `retained`, `slots`, `max_payload`). The schema is described in the comment at the top of the file. `scripts/channels.py` reads it without any package, checks it and writes `cpp/include/raccoon/ChannelTable.h`:
+`channels.yml` lists every channel with its message type and the properties of its ring (`reliable`, `retained`, `slots`, `max_payload`). The schema is described in the comment at the top of the file. `scripts/channels.py` reads it without any package, checks it and writes `cpp/include/raccoon/ChannelTable.h`, `python/raccoon_transport/channel_table.py` and `dart/lib/src/channel_table.dart`. In every language a channel is named by its path: `hardware/motor/{port}/cmd/power` is `channels::hardware::motor::cmd::power(port)` in C++ and `channels.hardware.motor.cmd.power(port)` in Python and Dart, `hardware/imu/state/gyro` is `channels::hardware::imu::state::GYRO` in C++, `channels.hardware.imu.state.GYRO` in Python and `channels.hardware.imu.state.gyro` in Dart.
 
 ```bash
-python3 scripts/channels.py --write   # regenerate ChannelTable.h
+python3 scripts/channels.py --write   # regenerate the three generated files
 python3 scripts/channels.py --check   # fails if the table is invalid or the header is out of date (also runs in CI)
 python3 scripts/channels.py --list    # every channel with the size of its slots
 ```

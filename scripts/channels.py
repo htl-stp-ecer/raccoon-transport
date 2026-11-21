@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read channels.yml, check it and generate the C++ channel table.
+"""Read channels.yml, check it and generate the channel table in C++, Python and Dart.
 
 channels.yml is the one list of every channel: its name, message type and how its
 ring behaves (see the comment at the top of that file). This script
@@ -9,7 +9,10 @@ ring behaves (see the comment at the top of that file). This script
 * expands the port ranges,
 * checks names, types, sizes and flags,
 * computes the size of every ring slot from the message type, and
-* writes cpp/include/raccoon/ChannelTable.h.
+* writes cpp/include/raccoon/ChannelTable.h, python/raccoon_transport/channel_table.py and
+  dart/lib/src/channel_table.dart. Each of them names a channel by its path, for example
+  channels::hardware::motor::cmd::power(port) in C++ and channels.hardware.motor.cmd.power(port)
+  in Python and Dart.
 
 Usage:
     scripts/channels.py --write   regenerate the generated files
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import keyword
 import re
 import sys
 from dataclasses import dataclass
@@ -29,6 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TABLE = ROOT / "channels.yml"
 CONTRACT = ROOT / "contract" / "contract.json"
 CPP_HEADER = ROOT / "cpp" / "include" / "raccoon" / "ChannelTable.h"
+PY_MODULE = ROOT / "python" / "raccoon_transport" / "channel_table.py"
+DART_MODULE = ROOT / "dart" / "lib" / "src" / "channel_table.dart"
 
 NAME_GRAMMAR = re.compile(r"^[0-9A-Za-z_-]+(/[0-9A-Za-z_-]+)*$")
 ENTRY_KEYS = {"name", "ports", "type", "doc", "reliable", "retained", "slots", "max_payload"}
@@ -154,11 +160,12 @@ class Channel:
 
 
 @dataclass(frozen=True)
-class PortRange:
-    name: str             # the name with "{port}"
-    first_index: int      # index of port `low` in the channel list
-    low: int
-    high: int
+class Leaf:
+    """One entry of the table: a single channel or a range of ports."""
+    pattern: str                 # the name, with "{port}" for a range
+    low: int | None              # first port of a range, None for a single channel
+    high: int | None
+    first_index: int             # index of the first channel in the channel list
 
 
 def parse_size(value, where: str) -> int:
@@ -173,11 +180,11 @@ def slot_stride(payload: int) -> int:
     return (SLOT_HEADER + payload + ALIGN - 1) // ALIGN * ALIGN
 
 
-def expand(document: dict, sizes: dict[str, int | None]) -> tuple[list[Channel], list[PortRange]]:
+def expand(document: dict, sizes: dict[str, int | None]) -> tuple[list[Channel], list[Leaf]]:
     if document.get("format") != 1:
         raise TableError(f"{TABLE.name}: unsupported format {document.get('format')!r}")
     channels: list[Channel] = []
-    ranges: list[PortRange] = []
+    leaves: list[Leaf] = []
     seen: set[str] = set()
     for index, entry in enumerate(document["channels"]):
         name = entry.get("name", f"<entry {index}>")
@@ -196,8 +203,8 @@ def expand(document: dict, sizes: dict[str, int | None]) -> tuple[list[Channel],
             if not ports or int(ports.group(1)) > int(ports.group(2)):
                 raise TableError(f"{where}: ports must look like 0..3")
             low, high = int(ports.group(1)), int(ports.group(2))
-            if "{port}" not in entry["name"]:
-                raise TableError(f"{where}: ports without {{port}} in the name")
+            if "{port}" not in entry["name"].split("/"):
+                raise TableError(f"{where}: ports need {{port}} as a whole segment of the name")
             names = [entry["name"].replace("{port}", str(p)) for p in range(low, high + 1)]
         elif "{port}" in entry["name"]:
             raise TableError(f"{where}: {{port}} in the name without ports")
@@ -226,8 +233,7 @@ def expand(document: dict, sizes: dict[str, int | None]) -> tuple[list[Channel],
         retained = entry.get("retained", "state" in entry["name"].split("/"))
         reliable = entry.get("reliable", False)
 
-        if low is not None:
-            ranges.append(PortRange(entry["name"], len(channels), low, high))
+        leaves.append(Leaf(entry["name"], low, high, len(channels)))
         for offset, concrete in enumerate(names):
             if not NAME_GRAMMAR.match(concrete):
                 raise TableError(f"{where}: {concrete!r} is not a valid channel name")
@@ -237,33 +243,133 @@ def expand(document: dict, sizes: dict[str, int | None]) -> tuple[list[Channel],
             channels.append(Channel(concrete, message_type, entry["doc"], reliable, retained,
                                     slots, payload, size is not None, index,
                                     None if low is None else low + offset))
-    return channels, ranges
+    return channels, leaves
 
 
-def load() -> tuple[list[Channel], list[PortRange]]:
+def load() -> tuple[list[Channel], list[Leaf]]:
     document = parse_table(TABLE.read_text(encoding="utf-8"))
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
     return expand(document, type_sizes(contract))
 
 
+# ── Channel tree ───────────────────────────────────────────────────────────
+#
+# A channel is named by its path in every language: hardware/motor/{port}/cmd/power
+# becomes channels::hardware::motor::cmd::power(port) in C++ and
+# channels.hardware.motor.cmd.power(port) in Python and Dart. The segment "{port}" is
+# not part of the path; the leaf is a function of the port instead.
+
+CPP_RESERVED = {
+    "alignas", "alignof", "and", "asm", "auto", "bool", "break", "case", "catch", "char", "class", "concept",
+    "const", "constexpr", "continue", "decltype", "default", "delete", "do", "double", "else", "enum", "explicit",
+    "export", "extern", "false", "float", "for", "friend", "goto", "if", "inline", "int", "long", "mutable",
+    "namespace", "new", "noexcept", "not", "nullptr", "operator", "or", "private", "protected", "public",
+    "register", "requires", "return", "short", "signed", "sizeof", "static", "struct", "switch", "template",
+    "this", "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using", "virtual",
+    "void", "volatile", "while", "xor",
+}
+DART_RESERVED = {
+    "abstract", "as", "assert", "async", "await", "break", "case", "catch", "class", "const", "continue",
+    "default", "do", "dynamic", "else", "enum", "export", "extends", "extension", "external", "factory", "false",
+    "final", "finally", "for", "get", "if", "implements", "import", "in", "interface", "is", "late", "library",
+    "mixin", "new", "null", "on", "operator", "part", "required", "rethrow", "return", "set", "static", "super",
+    "switch", "this", "throw", "true", "try", "typedef", "var", "void", "while", "with", "yield",
+}
+
+
+class Node:
+    def __init__(self) -> None:
+        self.children: dict[str, "Node"] = {}
+        self.leaf: Leaf | None = None
+
+
+def identifier(segment: str, where: str) -> str:
+    ident = re.sub(r"[^0-9A-Za-z]", "_", segment).lower()
+    if ident[0].isdigit():
+        raise TableError(f"{where}: segment {segment!r} starts with a digit")
+    if ident in CPP_RESERVED or ident in DART_RESERVED or keyword.iskeyword(ident):
+        raise TableError(f"{where}: segment {segment!r} is a reserved word in C++, Python or Dart")
+    return ident
+
+
+def camel(ident: str) -> str:
+    head, *rest = ident.split("_")
+    return head + "".join(part.capitalize() for part in rest)
+
+
+def build_tree(leaves: list[Leaf]) -> Node:
+    root = Node()
+    for leaf in leaves:
+        where = f"{TABLE.name}: {leaf.pattern}"
+        node = root
+        for segment in [s for s in leaf.pattern.split("/") if s != "{port}"]:
+            name = identifier(segment, where)
+            if node.leaf is not None:
+                raise TableError(f"{where}: {segment!r} lies below another channel")
+            node = node.children.setdefault(name, Node())
+        if node.leaf is not None or node.children:
+            raise TableError(f"{where}: the same path as another channel or a part of one")
+        node.leaf = leaf
+    check_names(root, "")
+    return root
+
+
+def check_names(node: Node, path: str) -> None:
+    seen: dict[str, str] = {}
+    for name in node.children:
+        for variant in (name.replace("_", ""), camel(name)):
+            if variant.lower() in seen and seen[variant.lower()] != name:
+                raise TableError(f"{TABLE.name}: {path or '/'}: {name!r} and {seen[variant.lower()]!r} give the same name in a language")
+            seen[variant.lower()] = name
+    for name, child in node.children.items():
+        check_names(child, f"{path}/{name}")
+
+
+def walk(node: Node, path: tuple[str, ...] = ()):
+    """Yield (path, node) for every node below `node`, in the order of the table."""
+    for name, child in node.children.items():
+        yield path + (name,), child
+        yield from walk(child, path + (name,))
+
+
 # ── C++ ────────────────────────────────────────────────────────────────────
 
-def constant_name(name: str) -> str:
-    return re.sub(r"[^0-9A-Za-z]", "_", name).upper()
+def cpp_leaf(name: str, leaf: Leaf, indent: str) -> list[str]:
+    if leaf.low is None:
+        return [f'{indent}inline constexpr std::string_view {name.upper()} = "{leaf.pattern}";']
+    return [
+        f"{indent}constexpr std::string_view {name}(int port) noexcept",
+        f"{indent}{{ return port < {leaf.low} || port > {leaf.high} ? std::string_view{{}} : "
+        f"CHANNEL_TABLE[{leaf.first_index} + (port - {leaf.low})].name; }}",
+    ]
 
 
-def function_name(pattern: str) -> str:
-    return re.sub(r"[^0-9A-Za-z]+", "_", pattern.replace("{port}", "")).strip("_").lower()
+def cpp_tree(node: Node, depth: int) -> list[str]:
+    indent = "    " * depth
+    lines: list[str] = []
+    for name, child in node.children.items():
+        if child.leaf is not None:
+            lines += cpp_leaf(name, child.leaf, indent)
+        else:
+            lines.append(f"{indent}namespace {name}")
+            lines.append(f"{indent}{{")
+            lines += cpp_tree(child, depth + 1)
+            lines.append(f"{indent}}}")
+    return lines
 
 
-def cpp_header(channels: list[Channel], ranges: list[PortRange]) -> str:
-    in_range = {c.name for r in ranges for c in channels[r.first_index:r.first_index + r.high - r.low + 1]}
+def cpp_header(channels: list[Channel], leaves: list[Leaf]) -> str:
+    tree = build_tree(leaves)
     lines = [
         "// Generated by scripts/channels.py from channels.yml. Do not edit.",
         "//",
         "// Every channel of the transport with the properties of its ring. The slot",
         "// payload of a fixed-size type is the encoded size of the type, for the other",
         "// types it is the limit from the table.",
+        "//",
+        "// A channel is named by its path: hardware/motor/{port}/cmd/power is",
+        "// channels::hardware::motor::cmd::power(port), hardware/imu/state/gyro is",
+        "// channels::hardware::imu::state::GYRO.",
         "#pragma once",
         "",
         "#include <cstddef>",
@@ -308,24 +414,121 @@ def cpp_header(channels: list[Channel], ranges: list[PortRange]) -> str:
         "    constexpr uint64_t slot_stride(uint32_t payload) noexcept",
         f"    {{ return (uint64_t{{{SLOT_HEADER}}} + payload + {ALIGN - 1}) / {ALIGN} * {ALIGN}; }}",
         "",
-        "    // Channels without a port.",
+        "    // The channels by path. A channel of a port range is a function of the port that",
+        "    // returns the name, or an empty name for a port outside the range.",
     ]
-    for channel in channels:
-        if channel.name not in in_range:
-            lines.append(f'    inline constexpr std::string_view {constant_name(channel.name)} = "{channel.name}";')
-    lines += ["", "    // Channels of a port range: the name for a port, or an empty view when the port is out of range."]
-    for r in ranges:
-        function = function_name(r.name)
-        lines.append(
-            f"    constexpr std::string_view {function}(int port) noexcept")
-        lines.append(
-            f"    {{ return port < {r.low} || port > {r.high} ? std::string_view{{}} : "
-            f"CHANNEL_TABLE[{r.first_index} + (port - {r.low})].name; }}")
+    lines += cpp_tree(tree, 1)
     lines += ["}", ""]
     return "\n".join(lines)
 
 
-GENERATED = [(CPP_HEADER, cpp_header)]
+# ── Python ─────────────────────────────────────────────────────────────────
+
+def py_tree(node: Node, depth: int) -> list[str]:
+    indent = "    " * depth
+    lines: list[str] = []
+    for name, child in node.children.items():
+        if child.leaf is not None:
+            leaf = child.leaf
+            if leaf.low is None:
+                lines.append(f'{indent}{name.upper()} = "{leaf.pattern}"')
+            else:
+                lines += [
+                    f"{indent}@staticmethod",
+                    f"{indent}def {name}(port: int) -> str:",
+                    f'{indent}    return _port("{leaf.pattern}", port, {leaf.low}, {leaf.high})',
+                    "",
+                ]
+        else:
+            lines.append(f"{indent}class {name}:")
+            lines += py_tree(child, depth + 1)
+            lines.append("")
+    return lines
+
+
+def py_module(channels: list[Channel], leaves: list[Leaf]) -> str:
+    tree = build_tree(leaves)
+    lines = [
+        '"""Generated by scripts/channels.py from channels.yml. Do not edit.',
+        "",
+        "A channel is named by its path: hardware/motor/{port}/cmd/power is",
+        "channels.hardware.motor.cmd.power(port), hardware/imu/state/gyro is",
+        'channels.hardware.imu.state.GYRO.',
+        '"""',
+        "",
+        "# ruff: noqa",
+        "from __future__ import annotations",
+        "",
+        "",
+        "def _port(pattern: str, port: int, low: int, high: int) -> str:",
+        "    if isinstance(port, bool) or not isinstance(port, int) or not low <= port <= high:",
+        '        raise ValueError(f"port {port!r} is outside {low}..{high} for {pattern}")',
+        '    return pattern.replace("{port}", str(port))',
+        "",
+        "",
+        "class channels:",
+    ]
+    body = py_tree(tree, 1)
+    while body and body[-1] == "":
+        body.pop()
+    lines += body
+    lines += [""]
+    return "\n".join(lines)
+
+
+# ── Dart ───────────────────────────────────────────────────────────────────
+
+def dart_class_name(path: tuple[str, ...]) -> str:
+    return "_" + "".join(camel(part)[0].upper() + camel(part)[1:] for part in path)
+
+
+def dart_tree(node: Node, path: tuple[str, ...]) -> list[str]:
+    name = dart_class_name(path) if path else "_Channels"
+    members, nested = [], []
+    for child_name, child in node.children.items():
+        member = camel(child_name)
+        if child.leaf is not None:
+            leaf = child.leaf
+            if leaf.low is None:
+                members.append(f"  String get {member} => '{leaf.pattern}';")
+            else:
+                members.append(f"  String {member}(int port) => _port('{leaf.pattern}', port, {leaf.low}, {leaf.high});")
+        else:
+            members.append(f"  final {member} = const {dart_class_name(path + (child_name,))}();")
+            nested += dart_tree(child, path + (child_name,))
+    lines = [f"class {name} {{", f"  const {name}();"]
+    lines += members
+    lines += ["}", ""]
+    return lines + nested
+
+
+def dart_module(channels: list[Channel], leaves: list[Leaf]) -> str:
+    tree = build_tree(leaves)
+    lines = [
+        "// Generated by scripts/channels.py from channels.yml. Do not edit.",
+        "//",
+        "// A channel is named by its path: hardware/motor/{port}/cmd/power is",
+        "// channels.hardware.motor.cmd.power(port), hardware/imu/state/gyro is",
+        "// channels.hardware.imu.state.gyro.",
+        "",
+        "String _port(String pattern, int port, int low, int high) {",
+        "  if (port < low || port > high) {",
+        "    throw RangeError.range(port, low, high, 'port', pattern);",
+        "  }",
+        "  return pattern.replaceFirst('{port}', port.toString());",
+        "}",
+        "",
+        "const channels = _Channels();",
+        "",
+    ]
+    lines += dart_tree(tree, ())
+    while lines and lines[-1] == "":
+        lines.pop()
+    lines.append("")
+    return "\n".join(lines)
+
+
+GENERATED = [(CPP_HEADER, cpp_header), (PY_MODULE, py_module), (DART_MODULE, dart_module)]
 
 
 def main() -> int:
@@ -336,7 +539,7 @@ def main() -> int:
     mode.add_argument("--list", action="store_true")
     args = parser.parse_args()
     try:
-        channels, ranges = load()
+        channels, leaves = load()
     except TableError as error:
         print(f"channels: {error}", file=sys.stderr)
         return 1
@@ -350,7 +553,7 @@ def main() -> int:
 
     stale = []
     for path, render in GENERATED:
-        content = render(channels, ranges)
+        content = render(channels, leaves)
         if args.write:
             path.write_text(content, encoding="utf-8")
         elif not path.exists() or path.read_text(encoding="utf-8") != content:
