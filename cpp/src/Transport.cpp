@@ -144,11 +144,28 @@ namespace raccoon
             // channel — see raccoon::dedup::shouldDrop.
             dedup::LastPayload dedupState;
         };
+        struct ChannelStatsAccumulator
+        {
+            uint64_t deliveries{0};
+            int64_t latencyMinUs{std::numeric_limits<int64_t>::max()};
+            int64_t latencyMaxUs{0};
+            int64_t latencySumUs{0};
+            uint64_t latencyCount{0};
+            int64_t callbackMinUs{std::numeric_limits<int64_t>::max()};
+            int64_t callbackMaxUs{0};
+            int64_t callbackSumUs{0};
+            uint64_t callbackCount{0};
+        };
         struct SubEntry
         {
             std::string channel;
             rrb_reader_t* reader = nullptr;
-            std::vector<Transport::RawHandler> handlers;
+            // Copy-on-write: subscribe replaces the list, a delivery in progress keeps
+            // the one it started with, and a delivery copies one pointer, not the handlers.
+            std::shared_ptr<const std::vector<Transport::RawHandler>> handlers =
+                std::make_shared<const std::vector<Transport::RawHandler>>();
+            // Statistics of this channel, guarded by Impl::statsMutex.
+            ChannelStatsAccumulator stats;
             // Per-channel scratch buffer for the receive copy; it grows to the
             // size of the biggest frame received.
             std::vector<uint8_t> scratch;
@@ -184,18 +201,6 @@ namespace raccoon
         std::atomic<uint64_t> dedupCount{0};
 
         // ---- Stats --------------------------------------------------------
-        struct ChannelStatsAccumulator
-        {
-            uint64_t deliveries{0};
-            int64_t latencyMinUs{std::numeric_limits<int64_t>::max()};
-            int64_t latencyMaxUs{0};
-            int64_t latencySumUs{0};
-            uint64_t latencyCount{0};
-            int64_t callbackMinUs{std::numeric_limits<int64_t>::max()};
-            int64_t callbackMaxUs{0};
-            int64_t callbackSumUs{0};
-            uint64_t callbackCount{0};
-        };
         std::mutex statsMutex;
         int64_t latencyMinUs{std::numeric_limits<int64_t>::max()};
         int64_t latencyMaxUs{0};
@@ -211,7 +216,6 @@ namespace raccoon
         uint64_t spinCount{0};
         uint64_t spinActiveCount{0};
         uint64_t spinIdleCount{0};
-        std::unordered_map<std::string, ChannelStatsAccumulator> channelStats;
 
         explicit Impl(const std::string& /*provider*/)
         {
@@ -635,6 +639,53 @@ namespace raccoon
             }
         }
 
+        // Hand one frame to the handlers of a subscriber and record the statistics.
+        // Called on the spin thread, without apiMutex.
+        void deliver(SubEntry* sub, const void* data, size_t len)
+        {
+            const int64_t msgUs = readTimestampBE(data, static_cast<int>(len));
+            int64_t latencyUs = -1;
+            if (msgUs > 0)
+            {
+                const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                latencyUs = nowUs - msgUs;
+            }
+            std::shared_ptr<const std::vector<Transport::RawHandler>> handlers;
+            {
+                std::lock_guard<std::recursive_mutex> lk(apiMutex);
+                handlers = sub->handlers;
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            invokeHandlers(sub->channel, *handlers, data, static_cast<int>(len));
+            const int64_t cbUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+
+            std::lock_guard<std::mutex> lk(statsMutex);
+            if (latencyUs >= 0)
+            {
+                latencyMinUs = std::min(latencyMinUs, latencyUs);
+                latencyMaxUs = std::max(latencyMaxUs, latencyUs);
+                latencySumUs += latencyUs;
+                ++latencyCount;
+                auto& ch = sub->stats;
+                ch.latencyMinUs = std::min(ch.latencyMinUs, latencyUs);
+                ch.latencyMaxUs = std::max(ch.latencyMaxUs, latencyUs);
+                ch.latencySumUs += latencyUs;
+                ++ch.latencyCount;
+            }
+            callbackMinUs = std::min(callbackMinUs, cbUs);
+            callbackMaxUs = std::max(callbackMaxUs, cbUs);
+            callbackSumUs += cbUs;
+            ++callbackCount;
+            auto& ch = sub->stats;
+            ch.callbackMinUs = std::min(ch.callbackMinUs, cbUs);
+            ch.callbackMaxUs = std::max(ch.callbackMaxUs, cbUs);
+            ch.callbackSumUs += cbUs;
+            ++ch.callbackCount;
+            ++ch.deliveries;  // every frame handed to a handler, whatever its size
+        }
+
         // Run every handler for one frame. Exceptions are reported, not propagated.
         void invokeHandlers(const std::string& channel,
                             const std::vector<Transport::RawHandler>& handlers,
@@ -769,7 +820,9 @@ namespace raccoon
             const size_t pre = impl_->subscribers.size();
             auto* sub = impl_->subscriberFor(channel);
             if (!sub) return false;
-            sub->handlers.push_back(std::move(handler));
+            auto next = std::make_shared<std::vector<Transport::RawHandler>>(*sub->handlers);
+            next->push_back(std::move(handler));
+            sub->handlers = std::move(next);
             fresh_channel = (impl_->subscribers.size() > pre);
         }
         // If a NEW channel was opened, the spin thread's waitv list no
@@ -824,21 +877,21 @@ namespace raccoon
         {
             while (true)
             {
-                std::vector<uint8_t> frame;
-                std::vector<Transport::RawHandler> handlersCopy;
+                size_t outLen = 0;
                 {
+                    // The reader is not thread-safe; the frame stays in the subscriber's
+                    // scratch buffer (only this thread uses it), so the lock covers just
+                    // the receive and the handlers run without it.
                     std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
                     if (!impl_->isAlive()) return delivered;
-                    size_t outLen = 0;
                     int rc = rrb_reader_recv(sub->reader,
                                              sub->scratch.data(),
                                              sub->scratch.size(),
                                              &outLen);
                     if (rc == RRB_RECV_TOO_BIG)
                     {
-                        // The frame is bigger than the buffer: grow it to what this
-                        // frame needs (not to the ring's max_payload, which can be
-                        // many MiB) and take the frame again.
+                        // Grow the buffer to what this frame needs (not to the ring's
+                        // max_payload, which can be many MiB) and take the frame again.
                         sub->scratch.resize(outLen);
                         rc = rrb_reader_recv(sub->reader,
                                              sub->scratch.data(),
@@ -851,29 +904,8 @@ namespace raccoon
                         }
                     }
                     if (rc != 0) break;  // 1 = no data, -1 = error
-                    frame.assign(sub->scratch.begin(),
-                                 sub->scratch.begin() + outLen);
-                    handlersCopy = sub->handlers;
                 }
-
-                // Latency: now - msg timestamp (microseconds).
-                int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                int64_t msgUs = Impl::readTimestampBE(frame.data(),
-                                                     (int)frame.size());
-                if (msgUs > 0)
-                {
-                    recordLatency(sub->channel, nowUs - msgUs);
-                }
-
-                const auto cbStart = std::chrono::steady_clock::now();
-                impl_->invokeHandlers(sub->channel, handlersCopy,
-                                      frame.data(), (int)frame.size());
-                const auto cbEnd = std::chrono::steady_clock::now();
-                recordCallback(sub->channel,
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        cbEnd - cbStart).count());
-
+                impl_->deliver(sub, sub->scratch.data(), outLen);
                 ++delivered;
             }
         }
@@ -913,27 +945,7 @@ namespace raccoon
             auto cb = [](size_t idx, const void* data, size_t len,
                          void* user) -> int {
                 auto* c = static_cast<MultiCtx*>(user);
-                Impl::SubEntry* sub = c->entries[idx];
-                int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                int64_t msgUs = Impl::readTimestampBE(data, (int)len);
-                if (msgUs > 0)
-                    c->t->recordLatency(sub->channel, nowUs - msgUs);
-                std::vector<Transport::RawHandler> handlersCopy;
-                {
-                    // recordLatency takes its own lock; the handler list is
-                    // guarded by apiMutex (subscribe_raw appends to it).
-                    std::lock_guard<std::recursive_mutex> lk(c->t->impl_->apiMutex);
-                    handlersCopy = sub->handlers;
-                }
-                // Same accounting as the drain pass above: every frame handed to a user
-                // handler counts as a delivery (recordLatency skips payloads < 8 bytes).
-                const auto cbStart = std::chrono::steady_clock::now();
-                c->t->impl_->invokeHandlers(sub->channel, handlersCopy, data, (int)len);
-                const auto cbEnd = std::chrono::steady_clock::now();
-                c->t->recordCallback(sub->channel,
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        cbEnd - cbStart).count());
+                c->t->impl_->deliver(c->entries[idx], data, len);
                 ++(*c->delivered_out);
                 return 0;
             };
@@ -1015,44 +1027,6 @@ namespace raccoon
 
     // ---- Stats wiring --------------------------------------------------
 
-    void Transport::recordLatency(const std::string& channel, int64_t us)
-    {
-        if (!impl_ || us < 0) return;
-        std::lock_guard<std::mutex> lk(impl_->statsMutex);
-        impl_->latencyMinUs = std::min(impl_->latencyMinUs, us);
-        impl_->latencyMaxUs = std::max(impl_->latencyMaxUs, us);
-        impl_->latencySumUs += us;
-        ++impl_->latencyCount;
-        auto& ch = impl_->channelStats[channel];
-        ch.latencyMinUs = std::min(ch.latencyMinUs, us);
-        ch.latencyMaxUs = std::max(ch.latencyMaxUs, us);
-        ch.latencySumUs += us;
-        ++ch.latencyCount;
-        // ch.deliveries is bumped in recordCallback() so payloads without
-        // a parseable timestamp prefix still register a delivery.
-    }
-
-    void Transport::recordCallback(const std::string& channel, int64_t us)
-    {
-        if (!impl_) return;
-        std::lock_guard<std::mutex> lk(impl_->statsMutex);
-        impl_->callbackMinUs = std::min(impl_->callbackMinUs, us);
-        impl_->callbackMaxUs = std::max(impl_->callbackMaxUs, us);
-        impl_->callbackSumUs += us;
-        ++impl_->callbackCount;
-        auto& ch = impl_->channelStats[channel];
-        ch.callbackMinUs = std::min(ch.callbackMinUs, us);
-        ch.callbackMaxUs = std::max(ch.callbackMaxUs, us);
-        ch.callbackSumUs += us;
-        ++ch.callbackCount;
-        // Count every frame we hand off to a user handler, not only the
-        // ones whose payload carried a parseable timestamp prefix.
-        // recordLatency() also ticks deliveries when it runs, but it short-
-        // circuits on payloads < 8 bytes — without this bump, callers that
-        // publish small raw frames would see zero deliveries reported.
-        ++ch.deliveries;
-    }
-
     void Transport::recordSpin(int result, int64_t us)
     {
         if (!impl_) return;
@@ -1113,15 +1087,21 @@ namespace raccoon
         out.handler_errors =
             impl_->handlerErrorTotal.exchange(0, std::memory_order_relaxed);
 
-        for (auto& [ch, acc] : impl_->channelStats) {
-            TransportStats::Channel c{};
-            c.name = ch;
-            c.deliveries = acc.deliveries;
-            fillLat(c.latency, acc.latencyMinUs, acc.latencyMaxUs,
-                    acc.latencySumUs, acc.latencyCount);
-            fillCb(c.callback, acc.callbackMinUs, acc.callbackMaxUs,
-                   acc.callbackSumUs, acc.callbackCount);
-            out.channels.push_back(std::move(c));
+        {
+            std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+            for (auto& sub : impl_->subscribers) {
+                auto& acc = sub->stats;
+                if (acc.deliveries == 0) continue;
+                TransportStats::Channel c{};
+                c.name = sub->channel;
+                c.deliveries = acc.deliveries;
+                fillLat(c.latency, acc.latencyMinUs, acc.latencyMaxUs,
+                        acc.latencySumUs, acc.latencyCount);
+                fillCb(c.callback, acc.callbackMinUs, acc.callbackMaxUs,
+                       acc.callbackSumUs, acc.callbackCount);
+                out.channels.push_back(std::move(c));
+                acc = Impl::ChannelStatsAccumulator{};
+            }
         }
 
         // Reset the accumulators
@@ -1139,7 +1119,6 @@ namespace raccoon
         impl_->spinCount = 0;
         impl_->spinActiveCount = 0;
         impl_->spinIdleCount = 0;
-        impl_->channelStats.clear();
         return out;
     }
 }

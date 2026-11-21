@@ -263,8 +263,6 @@ namespace raccoon
         class Impl;
         std::unique_ptr<Impl> impl_;
 
-        void recordLatency(const std::string& channel, int64_t us);
-        void recordCallback(const std::string& channel, int64_t us);
         void recordSpin(int result, int64_t us);
     };
 }
