@@ -117,4 +117,11 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_lifecycle_robust_tests
         COMMAND raccoon_transport_lifecycle_robust_tests)
+
+    add_executable(raccoon_transport_channel_table_tests
+        tests/test_channel_table.cpp)
+    target_include_directories(raccoon_transport_channel_table_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_channel_table_tests
+        COMMAND raccoon_transport_channel_table_tests)
 endif()

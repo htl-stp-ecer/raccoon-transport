@@ -78,6 +78,18 @@ The name decides how a channel is treated: a channel is a command channel when i
 
 Run `python3 scripts/contract.py --write` afterwards.
 
+### The channel table
+
+`channels.yml` lists every channel with its message type and the properties of its ring (`reliable`, `retained`, `slots`, `max_payload`). The schema is described in the comment at the top of the file. `scripts/channels.py` reads it without any package, checks it and writes `cpp/include/raccoon/ChannelTable.h`:
+
+```bash
+python3 scripts/channels.py --write   # regenerate ChannelTable.h
+python3 scripts/channels.py --check   # fails if the table is invalid or the header is out of date (also runs in CI)
+python3 scripts/channels.py --list    # every channel with the size of its slots
+```
+
+The slot size of a message type with a fixed size follows from the type (`contract/contract.json`); a type without one needs a `max_payload` in the table.
+
 ---
 
 ## Running tests
@@ -106,7 +118,7 @@ Use `-fsanitize=address` for AddressSanitizer.
 
 ```bash
 python3 scripts/contract.py --check
-python3 -m unittest scripts/test_contract.py python/tests/test_contract_check.py
+python3 -m unittest scripts/test_contract.py scripts/test_channels.py python/tests/test_contract_check.py
 ```
 
 ### Dart

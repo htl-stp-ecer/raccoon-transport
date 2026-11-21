@@ -34,7 +34,7 @@ and Dart (`dart/lib/src/contract.dart`). Every binary also carries the string
   `python3 scripts/contract.py --write` and commit the result.
 - `python3 scripts/contract.py --check` (also run in CI) fails if a generated
   file is stale or if the Python/Dart messages drifted from C++.
-- Tests: `python3 -m unittest scripts/test_contract.py`.
+- Tests: `python3 -m unittest scripts/test_contract.py scripts/test_channels.py`.
 - The release publishes `contract-hash.txt` and `contract.json` as assets.
 - Startup check: the decision table is implemented identically in C++
   (`cpp/src/ContractCheck.cpp`), Python (`raccoon_transport/contract_check.py`) and
@@ -44,6 +44,10 @@ and Dart (`dart/lib/src/contract.dart`). Every binary also carries the string
   version check is described in `contract/COMPONENT_VERSION_CHECK.md`.
 - C++ parses the bundle file with the vendored nlohmann/json (MIT) in
   `cpp/third_party/nlohmann`; keep `LICENSE.MIT` and `THIRD_PARTY_NOTICES.md`.
+
+## Channel table
+
+`channels.yml` is the list of every channel with its message type and the properties of its ring. `scripts/channels.py --write` generates `cpp/include/raccoon/ChannelTable.h` from it (`--check` runs in CI and in `build.py`). The slot size of a fixed-size message type follows from the type, other types carry a `max_payload` in the table.
 
 ## Build Commands
 

@@ -73,6 +73,7 @@ def run_in_container(version: str) -> None:
     # Fails when the generated constants are stale or the Python/Dart messages no longer match
     # the C++ wire layout. A wheel with a wrong contract must never be built.
     run(["python3", "scripts/contract.py", "--check"])
+    run(["python3", "scripts/channels.py", "--check"])
 
     pyproject = work / "python" / "pyproject.toml"
     text, count = re.subn(r'^version = ".*"', f'version = "{version}"', pyproject.read_text(), flags=re.MULTILINE)
