@@ -9,6 +9,8 @@ namespace raccoon
 {
     struct cam_frame_t
     {
+        static constexpr const char* type_name = "cam_frame_t";
+
         int64_t timestamp = 0;
         int32_t frame_width = 0;
         int32_t frame_height = 0;

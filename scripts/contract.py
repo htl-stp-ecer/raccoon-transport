@@ -106,8 +106,8 @@ def read_types() -> dict[str, list[list[str]]]:
         fields: list[list[str]] = []
         for line in body.split(";"):
             line = line.strip()
-            if not line or "(" in line:
-                continue  # method declaration
+            if not line or "(" in line or line.startswith("static "):
+                continue  # method declaration or static member (type_name)
             line = re.sub(r"\s*(=.*|\{.*\})$", "", line, flags=re.S)  # default value
             decl = re.fullmatch(r"(.+?)\s+(\w+)", line, flags=re.S)
             if not decl:

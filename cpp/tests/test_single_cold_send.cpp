@@ -28,7 +28,12 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-// PublishOptions{} touches the legacy `reliable`/`retryInterval` members,
+namespace
+{
+    inline bool ok(raccoon::PublishResult r) { return r == raccoon::PublishResult::Ok; }
+}
+
+// PublishOptions{} touches the legacy `reliable`/`retry_interval` members,
 // which are deprecated no-ops on the SHM backend. We publish with defaults on
 // purpose (best-effort is all the SHM ring offers); silence the note here just
 // like Transport.cpp does at its own call sites.
@@ -69,7 +74,7 @@ namespace
     };
 
     // A reader whose spin cadence is configurable. blockingTimeoutMs > 0
-    // makes each spinOnce() park in the kernel (the futex_waitv path) exactly
+    // makes each spin_once() park in the kernel (the futex_waitv path) exactly
     // like the stm32-data-reader's LcmBroker does — that is where a cold
     // channel can be missed, because a lazy (unattached) reader is not in the
     // waitv list and the producer's first publish skips FUTEX_WAKE.
@@ -83,7 +88,7 @@ namespace
             for (const auto& ch : channels)
             {
                 const std::string channel = ch;
-                require(transport_.subscribeRaw(channel,
+                require(transport_.subscribe_raw(channel,
                     [this, channel](const void* data, int len)
                     {
                         std::lock_guard<std::mutex> lock(mutex_);
@@ -99,7 +104,7 @@ namespace
         ~ReaderPump()
         {
             stop_ = true;
-            transport_.wakeControl();  // break any in-flight blocking wait
+            transport_.wake_control();  // break any in-flight blocking wait
             if (worker_.joinable()) worker_.join();
             transport_.shutdown();
         }
@@ -130,9 +135,9 @@ namespace
             {
                 if (blockingTimeoutMs_ > 0)
                 {
-                    transport_.spinOnce(blockingTimeoutMs_);
+                    transport_.spin_once(blockingTimeoutMs_);
                 }
-                else if (transport_.spinOnce(0) <= 0)
+                else if (transport_.spin_once(0) <= 0)
                 {
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
@@ -149,14 +154,14 @@ namespace
     };
 
     // Publish exactly one message through the SAME high-level API the robot
-    // uses (raccoon::Transport::publishRaw), so the test exercises the real
+    // uses (raccoon::Transport::publish_raw), so the test exercises the real
     // writer-create-on-first-publish path, not a hand-made rrb_writer.
     void publishOnce(const std::string& channel, const std::string& payload)
     {
         raccoon::Transport pub = raccoon::Transport::create();
-        require(pub.publishRaw(channel, payload.data(),
-                               static_cast<int>(payload.size()), {}),
-                "publishRaw failed for " + channel);
+        require(ok(pub.publish_raw(channel, payload.data(),
+                               static_cast<int>(payload.size()), {})),
+                "publish_raw failed for " + channel);
         // Keep the writer (and its /dev/shm ring) alive briefly so the ring
         // is not torn down before the reader attaches — the robot process
         // keeps its writer for the whole run.
@@ -170,12 +175,12 @@ namespace
     {
         static std::vector<raccoon::Transport> keep;
         keep.emplace_back(raccoon::Transport::create());
-        require(keep.back().publishRaw(channel, payload.data(),
-                                       static_cast<int>(payload.size()), {}),
-                "publishRaw failed for " + channel);
+        require(ok(keep.back().publish_raw(channel, payload.data(),
+                                           payload.size(), {})),
+                "publish_raw failed for " + channel);
     }
 
-    // Case 1: 1 ms poll loop (matches LcmBroker's spinOnce(1) cadence).
+    // Case 1: 1 ms poll loop (matches LcmBroker's spin_once(1) cadence).
     void testSingleColdSendPolling()
     {
         const std::string channel = "messages/error";
@@ -239,13 +244,13 @@ namespace
             // poll at 1 ms like the real LcmBroker, exit 0 on first frame.
             std::atomic<bool> got{false};
             raccoon::Transport rx = raccoon::Transport::create();
-            rx.subscribeRaw(channel,
+            rx.subscribe_raw(channel,
                 [&got](const void*, int) { got.store(true); });
             const auto deadline =
                 std::chrono::steady_clock::now() + std::chrono::seconds(5);
             while (!got.load() && std::chrono::steady_clock::now() < deadline)
             {
-                if (rx.spinOnce(1) <= 0)
+                if (rx.spin_once(1) <= 0)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             rx.shutdown();

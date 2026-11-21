@@ -6,6 +6,8 @@ namespace raccoon
 {
     struct cam_stream_ctl_t
     {
+        static constexpr const char* type_name = "cam_stream_ctl_t";
+
         int64_t timestamp = 0;
         int8_t enabled = 0;
 

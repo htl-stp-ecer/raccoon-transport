@@ -37,7 +37,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // Normal subscribe mode: <channel> <type> [--count N] [--timeout-ms MS] [--request-retained]
+    // Normal subscribe mode: <channel> <type> [--count N] [--timeout-ms MS]
     if (argc < 3) {
         std::cerr << "Usage: interop_subscribe <channel> <type> [options]\n";
         return 1;
@@ -48,7 +48,6 @@ int main(int argc, char* argv[]) {
 
     int count = 1;
     int timeoutMs = 5000;
-    bool requestRetained = false;
     bool reliable = false;
 
     for (int i = 3; i < argc; i++) {
@@ -57,8 +56,6 @@ int main(int argc, char* argv[]) {
             count = std::stoi(argv[++i]);
         } else if (arg == "--timeout-ms" && i + 1 < argc) {
             timeoutMs = std::stoi(argv[++i]);
-        } else if (arg == "--request-retained") {
-            requestRetained = true;
         } else if (arg == "--reliable") {
             reliable = true;
         }
@@ -68,10 +65,9 @@ int main(int argc, char* argv[]) {
     int received = 0;
 
     raccoon::SubscribeOptions opts;
-    opts.requestRetained = requestRetained;
     opts.reliable = reliable;
 
-    transport.subscribeRaw(channel, [&](const void* data, int dataLen) {
+    transport.subscribe_raw(channel, [&](const void* data, int dataLen) {
         try {
             std::string json = messageToJson(type, data, dataLen);
             printEvent("{\"event\":\"received\",\"data\":" + json + "}");
@@ -88,7 +84,7 @@ int main(int argc, char* argv[]) {
 
     while (received < count &&
            std::chrono::steady_clock::now() < deadline) {
-        transport.spinOnce(50);
+        transport.spin_once(50);
     }
 
     if (received >= count) {

@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // Normal publish mode: <channel> <type> <json> [--count N] [--interval-ms MS] [--retained]
+    // Normal publish mode: <channel> <type> <json> [--count N] [--interval-ms MS]
     if (argc < 4) {
         std::cerr << "Usage: interop_publish <channel> <type> <json> [options]\n";
         return 1;
@@ -46,7 +46,6 @@ int main(int argc, char* argv[]) {
 
     int count = 1;
     int intervalMs = 0;
-    bool retained = false;
     bool reliable = false;
 
     for (int i = 4; i < argc; i++) {
@@ -55,8 +54,6 @@ int main(int argc, char* argv[]) {
             count = std::stoi(argv[++i]);
         } else if (arg == "--interval-ms" && i + 1 < argc) {
             intervalMs = std::stoi(argv[++i]);
-        } else if (arg == "--retained") {
-            retained = true;
         } else if (arg == "--reliable") {
             reliable = true;
         }
@@ -64,12 +61,11 @@ int main(int argc, char* argv[]) {
 
     auto transport = raccoon::Transport::create();
     raccoon::PublishOptions opts;
-    opts.retained = retained;
     opts.reliable = reliable;
 
     for (int seq = 0; seq < count; seq++) {
         auto encoded = createAndEncode(type, values);
-        transport.publishRaw(channel, encoded.data(),
+        transport.publish_raw(channel, encoded.data(),
                              static_cast<int>(encoded.size()), opts);
         printEvent("{\"event\":\"published\",\"seq\":" +
                    std::to_string(seq) + "}");
@@ -78,13 +74,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (retained || reliable) {
+    if (reliable) {
         printEvent("{\"event\":\"ready\"}");
         // Spin transport in background to process retain requests / reliable ACKs
         std::atomic<bool> running{true};
         std::thread spinner([&]() {
             while (running.load(std::memory_order_relaxed)) {
-                transport.spinOnce(100);
+                transport.spin_once(100);
             }
         });
         // Wait for stdin EOF (parent closes stdin to signal shutdown)

@@ -7,6 +7,8 @@ namespace raccoon
 {
     struct orientation_matrix_t
     {
+        static constexpr const char* type_name = "orientation_matrix_t";
+
         int64_t timestamp = 0;
         std::array<float, 9> m{};
 

@@ -7,6 +7,8 @@ namespace raccoon
 {
     struct string_t
     {
+        static constexpr const char* type_name = "string_t";
+
         int64_t timestamp = 0;
         std::string value;
 

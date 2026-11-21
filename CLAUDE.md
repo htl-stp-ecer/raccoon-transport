@@ -18,9 +18,10 @@ raccoon-transport is the messaging layer shared by the Raccoon components (racco
 - The writer fills a slot, marks it with a sequence number and wakes parked readers through a futex word in the header. A reader copies a slot and checks the sequence number again afterwards (seqlock), so a slot that was overwritten during the copy is detected. A reader that falls a whole ring behind skips to the oldest intact slot. A reader checks about once a second, while it is idle, that its ring file is still the one on disk (`rrb_reader_revalidate`).
 - The ring file never shrinks: readers may have the larger file mapped, and a page beyond a shortened end of file would raise SIGBUS in them. A reader checks that the header geometry fits the file before it uses a ring.
 - `rrb_reader_recv` reports a frame that does not fit the buffer as `RRB_RECV_TOO_BIG` and keeps it; `rrb_reader_skip` drops it. `raccoon::Transport` grows its receive buffer to the ring's payload size, so subscribers never see a cut-off frame.
-- `raccoon::Transport::shutdown()` wakes threads inside `spinOnce()` and waits (up to one second) for them before it closes the readers. `stop()` only ends `spin()`; the destructor releases everything.
-- A handler that throws does not stop the spin loop. The error is counted (`TransportStats::handlerErrors`), the first few per channel are printed to stderr, and `setHandlerErrorHandler` receives each one.
-- Use one thread per `Transport` for `spinOnce()`.
+- `raccoon::Transport::shutdown()` wakes threads inside `spin_once()` and waits (up to one second) for them before it closes the readers. `stop()` only ends `spin()`; the destructor releases everything.
+- A handler that throws does not stop the spin loop. The error is counted (`TransportStats::handler_errors`), the first few per channel are printed to stderr, and `set_handler_error_handler` receives each one.
+- Use one thread per `Transport` for `spin_once()`.
+- `publish_raw`, `publish_typed` and `publish<T>` return a `PublishResult`: `Ok`, `NotInTable` (the channel is not in `channels.yml`), `TypeMismatch` (wrong message type, or a size other than the one of a fixed-size type), `TooBig` (above the limit of the channel) or `Closed` (the transport was shut down). `subscribe_raw` and `subscribe<T>` return `false` for the same reasons. Names follow the Rust convention: types and enum values in `PascalCase`, functions and variables in `snake_case`.
 
 ## Contract hash
 
@@ -101,7 +102,7 @@ CI runs them without gating the release.
 
 ### C++ Library (`cpp/`)
 - `raccoon_ring.c` / `raccoon_ring.h` — the ring buffer (C API): writer, reader, futex wake, multi-channel wait.
-- `raccoon::Transport` — the public API (PIMPL): publish, subscribe, `spinOnce`, reliable delivery, retain, statistics.
+- `raccoon::Transport` — the public API (PIMPL): publish, subscribe, `spin_once`, reliable delivery, retain, statistics.
 - `raccoon::Channels` — all channel names; `isCommandChannel` decides which channels are never deduplicated (a name ending in `_cmd` or containing `/cmd/`).
 - `cpp/bridge/` — a C library (`libraccoon_ring_bridge.so`) that the Dart package loads through FFI.
 

@@ -7,6 +7,8 @@ namespace raccoon
 {
     struct screen_render_answer_t
     {
+        static constexpr const char* type_name = "screen_render_answer_t";
+
         int64_t timestamp = 0;
         std::string screen_name;
         std::string value;

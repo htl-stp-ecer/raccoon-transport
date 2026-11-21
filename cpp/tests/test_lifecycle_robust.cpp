@@ -2,7 +2,7 @@
 //
 //   1. stop() followed by destruction must not terminate the process when the
 //      reliability thread was started.
-//   2. shutdown() while another thread sits in spinOnce() must not touch freed
+//   2. shutdown() while another thread sits in spin_once() must not touch freed
 //      readers.
 //   3. subscribing while another thread dispatches frames must not race on the
 //      handler list.
@@ -27,6 +27,11 @@
 #include <vector>
 
 #include <unistd.h>
+
+namespace
+{
+    inline bool ok(raccoon::PublishResult r) { return r == raccoon::PublishResult::Ok; }
+}
 
 namespace
 {
@@ -65,10 +70,10 @@ namespace
             raccoon::Transport t = raccoon::Transport::create();
             raccoon::PublishOptions options{};
             options.reliable = true;
-            options.maxRetries = 2;
-            options.retryInterval = std::chrono::milliseconds(20);
+            options.max_retries = 2;
+            options.retry_interval = std::chrono::milliseconds(20);
             auto p = payload(1234567);
-            check(t.publishRaw(CH, p.data(), static_cast<int>(p.size()), options),
+            check(ok(t.publish_raw(CH, p.data(), static_cast<int>(p.size()), options)),
                   "reliable publish succeeds and starts the reliability thread");
             t.stop();
             // Leaving the scope destroys a Transport whose reliability thread was
@@ -86,15 +91,15 @@ namespace
             removeRing(CH);
             raccoon::Transport t = raccoon::Transport::create();
             std::atomic<int> got{0};
-            t.subscribeRaw(CH, [&](const void*, int) { ++got; });
+            t.subscribe_raw(CH, [&](const void*, int) { ++got; });
 
             std::thread spinner([&] {
-                while (t.is_alive()) t.spinOnce(200);
+                while (t.is_alive()) t.spin_once(200);
             });
             for (int i = 0; i < 5; ++i)
             {
                 auto p = payload(1000 + i);
-                t.publishRaw(CH, p.data(), static_cast<int>(p.size()));
+                ok(t.publish_raw(CH, p.data(), static_cast<int>(p.size())));
                 std::this_thread::sleep_for(std::chrono::microseconds(300));
             }
             t.shutdown();
@@ -110,27 +115,27 @@ namespace
         raccoon::Transport t = raccoon::Transport::create();
         std::atomic<bool> stop{false};
         std::atomic<int> got{0};
-        t.subscribeRaw(CH, [&](const void*, int) { ++got; });
+        t.subscribe_raw(CH, [&](const void*, int) { ++got; });
 
         std::thread spinner([&] {
-            while (!stop.load()) t.spinOnce(100);
+            while (!stop.load()) t.spin_once(100);
         });
         std::thread publisher([&] {
             int64_t ts = 5000;
             while (!stop.load())
             {
                 auto p = payload(++ts);
-                t.publishRaw(CH, p.data(), static_cast<int>(p.size()));
+                ok(t.publish_raw(CH, p.data(), static_cast<int>(p.size())));
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
         });
         for (int i = 0; i < 200; ++i)
         {
-            t.subscribeRaw(CH, [&](const void*, int) { ++got; });
+            t.subscribe_raw(CH, [&](const void*, int) { ++got; });
             std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
         stop.store(true);
-        t.wakeControl();
+        t.wake_control();
         publisher.join();
         spinner.join();
         check(got.load() > 0, "handlers added while frames flow still receive frames");
@@ -143,15 +148,15 @@ namespace
         std::atomic<bool> done{false};
         {
             raccoon::Transport t = raccoon::Transport::create();
-            t.subscribeRaw(CH, [&](const void*, int) {
+            t.subscribe_raw(CH, [&](const void*, int) {
                 t.shutdown();  // on the spin thread itself
                 done = true;
             });
             auto p = payload(777);
-            t.publishRaw(CH, p.data(), static_cast<int>(p.size()));
+            ok(t.publish_raw(CH, p.data(), static_cast<int>(p.size())));
 
             std::thread spinner([&] {
-                for (int i = 0; i < 50 && !done.load(); ++i) t.spinOnce(100);
+                for (int i = 0; i < 50 && !done.load(); ++i) t.spin_once(100);
             });
             spinner.join();
             check(done.load(), "shutdown() from a handler returns (no self-deadlock)");
@@ -166,13 +171,13 @@ namespace
         removeRing(CH);
         raccoon::Transport t = raccoon::Transport::create();
         std::atomic<int> reports{0};
-        t.setHandlerErrorHandler([&](const std::string& channel, const std::string& what) {
+        t.set_handler_error_handler([&](const std::string& channel, const std::string& what) {
             if (channel == CH && what.find("boom") != std::string::npos) ++reports;
         });
-        t.subscribeRaw(CH, [](const void*, int) { throw std::runtime_error("boom"); });
+        t.subscribe_raw(CH, [](const void*, int) { throw std::runtime_error("boom"); });
         auto p = payload(4242);
-        t.publishRaw(CH, p.data(), static_cast<int>(p.size()));
-        for (int i = 0; i < 20 && reports.load() == 0; ++i) t.spinOnce(50);
+        ok(t.publish_raw(CH, p.data(), static_cast<int>(p.size())));
+        for (int i = 0; i < 20 && reports.load() == 0; ++i) t.spin_once(50);
         check(reports.load() > 0, "an exception from a handler reaches the handler error callback");
     }
 }

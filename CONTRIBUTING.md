@@ -35,7 +35,7 @@ Message types are written by hand in each language. C++ defines the wire layout;
 
 ### 1. C++ (defines the layout)
 
-- Header `messages/include/raccoon/my_value_t.hpp` with the struct and the three members `encoded_size()`, `encode()` and `decode()`.
+- Header `messages/include/raccoon/my_value_t.hpp` with the struct, the constant `static constexpr const char* type_name = "my_value_t";` (the name that `channels.yml` uses) and the three members `encoded_size()`, `encode()` and `decode()`.
 - Implementation `messages/types/my_value_t.cpp` using `codec::Writer` and `codec::Reader` from `raccoon/codec.hpp` (see `scalar_f_t.cpp`).
 - Add the `.cpp` file to `messages/CMakeLists.txt`.
 

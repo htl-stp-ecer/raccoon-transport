@@ -7,6 +7,8 @@ namespace raccoon
 {
     struct retain_request_t
     {
+        static constexpr const char* type_name = "retain_request_t";
+
         int64_t timestamp = 0;
         std::string channel;
         std::string subscriber_id;

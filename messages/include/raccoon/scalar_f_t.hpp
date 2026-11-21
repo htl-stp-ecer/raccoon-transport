@@ -6,6 +6,8 @@ namespace raccoon
 {
     struct scalar_f_t
     {
+        static constexpr const char* type_name = "scalar_f_t";
+
         int64_t timestamp = 0;
         float value = 0.0f;
 

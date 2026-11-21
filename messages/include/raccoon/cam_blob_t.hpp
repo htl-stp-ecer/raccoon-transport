@@ -7,6 +7,8 @@ namespace raccoon
 {
     struct cam_blob_t
     {
+        static constexpr const char* type_name = "cam_blob_t";
+
         int64_t timestamp = 0;
         std::string label;
         float x = 0.0f;

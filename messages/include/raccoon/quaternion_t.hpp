@@ -6,6 +6,8 @@ namespace raccoon
 {
     struct quaternion_t
     {
+        static constexpr const char* type_name = "quaternion_t";
+
         int64_t timestamp = 0;
         float w = 0.0f;
         float x = 0.0f;

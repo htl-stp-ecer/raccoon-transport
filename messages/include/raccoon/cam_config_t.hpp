@@ -7,6 +7,8 @@ namespace raccoon
 {
     struct cam_config_t
     {
+        static constexpr const char* type_name = "cam_config_t";
+
         int64_t timestamp = 0;
         std::string config;
 

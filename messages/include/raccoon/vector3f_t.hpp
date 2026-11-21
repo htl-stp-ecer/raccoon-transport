@@ -6,6 +6,8 @@ namespace raccoon
 {
     struct vector3f_t
     {
+        static constexpr const char* type_name = "vector3f_t";
+
         int64_t timestamp = 0;
         float x = 0.0f;
         float y = 0.0f;

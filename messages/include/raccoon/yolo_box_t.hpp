@@ -7,6 +7,8 @@ namespace raccoon
 {
     struct yolo_box_t
     {
+        static constexpr const char* type_name = "yolo_box_t";
+
         int64_t timestamp = 0;
         float x = 0.0f;
         float y = 0.0f;

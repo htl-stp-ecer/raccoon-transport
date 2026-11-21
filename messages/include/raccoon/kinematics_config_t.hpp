@@ -7,6 +7,8 @@ namespace raccoon
 {
     struct kinematics_config_t
     {
+        static constexpr const char* type_name = "kinematics_config_t";
+
         int64_t timestamp = 0;
         std::array<float, 12> inv_matrix{};
         std::array<float, 4> ticks_to_rad{};

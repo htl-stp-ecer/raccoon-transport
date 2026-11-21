@@ -6,13 +6,13 @@
 //   * one recursive mutex (apiMutex) guards the per-channel writer and subscriber
 //     maps and the handler lists
 //   * rrb_writer / rrb_reader instances are NOT thread-safe; every use goes through
-//     apiMutex, except the multi-channel wait in spinOnce(), which is why one thread
-//     calls spinOnce()
-//   * publishRaw may be called from any thread (the mutex serialises the writers)
-//   * subscribeRaw registers a handler; spinOnce polls each subscriber's ring,
+//     apiMutex, except the multi-channel wait in spin_once(), which is why one thread
+//     calls spin_once()
+//   * publish_raw may be called from any thread (the mutex serialises the writers)
+//   * subscribe_raw registers a handler; spin_once polls each subscriber's ring,
 //     releases the mutex around each handler call so a slow handler does not block
 //     unrelated transport operations, and copies the handler list under the mutex
-//   * shutdown() wakes spinOnce() callers on other threads and waits for them (at
+//   * shutdown() wakes spin_once() callers on other threads and waits for them (at
 //     most kShutdownSpinWaitMs) before it closes the readers; stop() only clears
 //     the running flag and the destructor releases the resources
 //
@@ -46,6 +46,7 @@
 #include <mutex>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -65,7 +66,7 @@ namespace raccoon
         // re-sends un-acked commands. Finer than the default 50 ms retry
         // interval so retries fire close to schedule.
         constexpr int kReliabilityTickMs = 5;
-        // How long shutdown() waits for spinOnce() calls on other threads to
+        // How long shutdown() waits for spin_once() calls on other threads to
         // return before it gives up closing the readers they may still use.
         constexpr int kShutdownSpinWaitMs = 1000;
         // Reported on stderr per channel; later ones are only counted.
@@ -73,7 +74,7 @@ namespace raccoon
         // Initial receive buffer per subscriber; it grows to the ring's payload size.
         constexpr size_t kInitialScratchBytes = 16 * 1024;
 
-        // Depth of spinOnce() calls on this thread, so shutdown() called from a
+        // Depth of spin_once() calls on this thread, so shutdown() called from a
         // handler does not wait for (and free state under) the spin it runs in.
         thread_local int tlsSpinDepth = 0;
     }
@@ -88,7 +89,7 @@ namespace raccoon
         // Set by the first shutdown() that releases the resources; stop() only
         // clears `running`, so the destructor still has something to clean up.
         std::atomic<bool> cleanedUp{false};
-        // spinOnce() calls currently inside the transport (any thread).
+        // spin_once() calls currently inside the transport (any thread).
         std::atomic<int> activeSpins{0};
 
         struct PubEntry
@@ -109,7 +110,16 @@ namespace raccoon
             std::vector<uint8_t> scratch;
         };
 
-        std::unordered_map<std::string, PubEntry>   publishers;
+        // Looked up with a string_view on every publish, without building a std::string.
+        struct SvHash
+        {
+            using is_transparent = void;
+            size_t operator()(std::string_view s) const noexcept
+            {
+                return std::hash<std::string_view>{}(s);
+            }
+        };
+        std::unordered_map<std::string, PubEntry, SvHash, std::equal_to<>> publishers;
         std::vector<std::unique_ptr<SubEntry>>      subscribers;
 
         // Coarse mutex protects every Impl mutation. Recursive so a
@@ -121,12 +131,12 @@ namespace raccoon
         // (b) this control word. Subscribe / unsubscribe / shutdown
         // bump controlSeq + FUTEX_WAKE so the spin thread re-snapshots
         // its subscriber list (or notices the stop request) without any
-        // periodic polling. Bumped via Transport::wakeControl().
+        // periodic polling. Bumped via Transport::wake_control().
         std::atomic<uint32_t> controlSeq{0};
 
         // Count of value-channel publishes dropped because their payload
         // was byte-identical to the previous one (deduplicate=true).
-        // Surfaced via getAndResetStats().publishesDeduplicated.
+        // Surfaced via get_and_reset_stats().publishes_deduplicated.
         std::atomic<uint64_t> dedupCount{0};
 
         // ---- Stats --------------------------------------------------------
@@ -173,7 +183,7 @@ namespace raccoon
 
         ~Impl() { shutdown(); }
 
-        // Bump the control word and wake a thread parked in spinOnce().
+        // Bump the control word and wake a thread parked in spin_once().
         void wake()
         {
             std::atomic_fetch_add_explicit(&controlSeq, uint32_t{1},
@@ -192,7 +202,7 @@ namespace raccoon
             if (tlsSpinDepth > 0) { wake(); return; }
             if (cleanedUp.exchange(true)) return;
 
-            // Let spinOnce() calls on other threads leave before their readers are
+            // Let spin_once() calls on other threads leave before their readers are
             // closed. They notice `running == false` after the wake. The wait is
             // bounded: a handler that needs a lock this thread holds (a host with
             // a global interpreter lock, say) must not hang the shutdown. In that
@@ -213,7 +223,7 @@ namespace raccoon
             if (spinsLeft)
             {
                 std::cerr << "raccoon::Transport: shutdown() gave up waiting for a "
-                             "spinOnce() call to return; its readers stay open until "
+                             "spin_once() call to return; its readers stay open until "
                              "the process ends\n";
             }
 
@@ -244,13 +254,13 @@ namespace raccoon
         // subscribers keep working). Correlation key is the message's own
         // `timestamp` (first 8 bytes, big-endian) — unique per publisher.
         //
-        // Publisher: publishRaw(reliable=true) sends the raw payload AND
+        // Publisher: publish_raw(reliable=true) sends the raw payload AND
         // records it in `pendingReliable`. A background thread re-sends any
-        // entry not ACKed within its retryInterval, up to maxRetries, then
+        // entry not ACKed within its retry_interval, up to max_retries, then
         // gives up with a loud cerr WARN. ACKs arrive on Channels::Protocol::ACK
         // and clear the matching pending entry.
         //
-        // Subscriber: subscribeRaw(reliable=true) wraps the handler so that
+        // Subscriber: subscribe_raw(reliable=true) wraps the handler so that
         // every received frame is ACKed (by timestamp) and re-sends are
         // de-duplicated (handler fires once per unique command).
         struct PendingReliable
@@ -260,8 +270,8 @@ namespace raccoon
             int64_t key;   // == message timestamp
             std::chrono::steady_clock::time_point lastSent;
             uint32_t attempts;
-            uint32_t maxRetries;
-            std::chrono::milliseconds retryInterval;
+            uint32_t max_retries;
+            std::chrono::milliseconds retry_interval;
             bool warnedRetransmit;
         };
         std::vector<PendingReliable> pendingReliable;
@@ -270,8 +280,8 @@ namespace raccoon
         std::thread reliableThread;
         std::atomic<bool> reliableThreadRun{false};
         bool reliableStarted = false;
-        std::atomic<uint64_t> reliableRetransmits{0};
-        std::atomic<uint64_t> reliableDropped{0};
+        std::atomic<uint64_t> reliable_retransmits{0};
+        std::atomic<uint64_t> reliable_dropped{0};
         // Collected under apiMutex in tickResends, fired to reliableHandler
         // (or cerr) OUTSIDE the lock in reliableLoop.
         struct RelEvt { bool gaveUp; std::string channel; int64_t key;
@@ -374,14 +384,14 @@ namespace raccoon
             keep.reserve(pendingReliable.size());
             for (auto& p : pendingReliable)
             {
-                if (now - p.lastSent < p.retryInterval)
+                if (now - p.lastSent < p.retry_interval)
                 {
                     keep.push_back(std::move(p));
                     continue;
                 }
-                if (p.attempts >= p.maxRetries)
+                if (p.attempts >= p.max_retries)
                 {
-                    reliableDropped.fetch_add(1, std::memory_order_relaxed);
+                    reliable_dropped.fetch_add(1, std::memory_order_relaxed);
                     out.push_back({true, p.channel, p.key, p.attempts});
                     continue;  // drop
                 }
@@ -389,7 +399,7 @@ namespace raccoon
                 if (w) rrb_writer_publish(w, p.payload.data(), p.payload.size());
                 p.lastSent = now;
                 ++p.attempts;
-                reliableRetransmits.fetch_add(1, std::memory_order_relaxed);
+                reliable_retransmits.fetch_add(1, std::memory_order_relaxed);
                 // Emit a single event on the first retransmit so a recovered
                 // one-shot drop is visible without spamming a line per attempt.
                 if (!p.warnedRetransmit)
@@ -418,8 +428,8 @@ namespace raccoon
             p.key = key;
             p.lastSent = std::chrono::steady_clock::now();
             p.attempts = 1;
-            p.maxRetries = options.maxRetries;
-            p.retryInterval = options.retryInterval;
+            p.max_retries = options.max_retries;
+            p.retry_interval = options.retry_interval;
             p.warnedRetransmit = false;
             pendingReliable.push_back(std::move(p));
         }
@@ -451,12 +461,12 @@ namespace raccoon
 
         // The table entry of a channel, or nullptr (with a message) when the channel is
         // not in the table: only channels of channels.yml exist.
-        static const channels::ChannelInfo* lookup(const std::string& channel)
+        static const channels::ChannelInfo* lookup(std::string_view channel)
         {
             const channels::ChannelInfo* info = channels::find_channel(channel);
             if (!info)
             {
-                std::cerr << "raccoon::Transport: channel '" << channel
+                std::cerr << "raccoon::Transport: channel '" << std::string(channel)
                           << "' is not in the channel table\n";
             }
             return info;
@@ -466,32 +476,34 @@ namespace raccoon
         {
             const channels::ChannelInfo* info = lookup(std::string(channel));
             if (!info) return nullptr;
-            return rrb_reader_open(std::string(channel).c_str(), info->slots, info->payload,
+            const std::string name(channel);
+            return rrb_reader_open(name.c_str(), info->slots, info->payload,
                                    info->retained ? RRB_FLAG_RETAINED : 0u);
         }
 
         // Get-or-create the writer of a channel. The geometry of the ring comes from
         // the channel table. Returns nullptr if the channel is not in the table or
         // /dev/shm is not writable.
-        rrb_writer_t* writerFor(const std::string& channel)
+        rrb_writer_t* writerFor(std::string_view channel)
         {
             auto it = publishers.find(channel);
             if (it != publishers.end()) return it->second.writer;
 
             const channels::ChannelInfo* info = lookup(channel);
             if (!info) return nullptr;
-            rrb_writer_t* w = rrb_writer_open(channel.c_str(), info->slots, info->payload);
+            const std::string name(channel);
+            rrb_writer_t* w = rrb_writer_open(name.c_str(), info->slots, info->payload);
             if (!w)
             {
                 std::cerr << "raccoon::Transport: cannot open the ring of '"
-                          << channel << "' (is " << RRB_DIR << " writable?)\n";
+                          << name << "' (is " << RRB_DIR << " writable?)\n";
                 return nullptr;
             }
-            publishers.emplace(channel, PubEntry{w, info, {}});
+            publishers.emplace(name, PubEntry{w, info, {}});
             return w;
         }
 
-        SubEntry* subscriberFor(const std::string& channel)
+        SubEntry* subscriberFor(std::string_view channel)
         {
             for (auto& s : subscribers)
             {
@@ -591,52 +603,79 @@ namespace raccoon
         return t;
     }
 
-    bool Transport::publishRaw(const std::string& channel, const void* data,
-                               int dataLen, const PublishOptions& options)
+    const char* to_string(PublishResult result) noexcept
     {
-        if (!impl_ || !impl_->isAlive() || !data || dataLen <= 0) return false;
-        std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
-        rrb_writer_t* w = impl_->writerFor(channel);
-        if (!w) return false;
-        const channels::ChannelInfo* info = impl_->publishers.find(channel)->second.info;
-        // A fixed-size type has exactly one size; a variable one has an upper limit.
-        if (info->fixed_size ? static_cast<uint32_t>(dataLen) != info->payload
-                             : static_cast<uint32_t>(dataLen) > info->payload)
+        switch (result)
         {
-            std::cerr << "raccoon::Transport: " << dataLen << " bytes do not fit '"
-                      << channel << "' (" << info->type
-                      << (info->fixed_size ? ", exactly " : ", at most ")
-                      << info->payload << " bytes)\n";
-            return false;
+        case PublishResult::Ok: return "Ok";
+        case PublishResult::NotInTable: return "NotInTable";
+        case PublishResult::TypeMismatch: return "TypeMismatch";
+        case PublishResult::TooBig: return "TooBig";
+        case PublishResult::Closed: return "Closed";
         }
+        return "Unknown";
+    }
+
+    PublishResult Transport::publish_raw(std::string_view channel, const void* data,
+                                         size_t len, const PublishOptions& options)
+    {
+        return publish_typed(channel, nullptr, data, len, options);
+    }
+
+    PublishResult Transport::publish_typed(std::string_view channel, const char* type_name,
+                                           const void* data, size_t len,
+                                           const PublishOptions& options)
+    {
+        if (!impl_ || !impl_->isAlive()) return PublishResult::Closed;
+        std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+        // The table is searched once per channel, when its writer is opened.
+        auto it = impl_->publishers.find(channel);
+        if (it == impl_->publishers.end())
+        {
+            if (!channels::find_channel(channel)) return PublishResult::NotInTable;
+            if (!impl_->writerFor(channel)) return PublishResult::Closed;
+            it = impl_->publishers.find(channel);
+        }
+        const channels::ChannelInfo* info = it->second.info;
+        rrb_writer_t* w = it->second.writer;
+        if (type_name && info->type != type_name) return PublishResult::TypeMismatch;
+        // A fixed-size type has exactly one size; a variable one has an upper limit.
+        if (info->fixed_size ? len != info->payload : len == 0) return PublishResult::TypeMismatch;
+        if (len > info->payload) return PublishResult::TooBig;
+        if (!data) return PublishResult::TypeMismatch;
 
         // Deduplication: when the caller opts in, drop value-channel
         // publishes whose payload is byte-identical to the previous one.
-        // Command channels are never deduplicated; the policy (including
-        // the timestamp-skipping comparison) lives in raccoon::dedup so the
-        // Dart FFI bridge shares exactly the same behaviour.
+        // Command channels are never deduplicated; the policy lives in
+        // raccoon::dedup so the Dart FFI bridge shares exactly the same behaviour.
         if (options.deduplicate)
         {
-            auto it = impl_->publishers.find(channel);
-            if (it != impl_->publishers.end() &&
-                dedup::shouldDrop(channel, data, static_cast<size_t>(dataLen),
-                                  it->second.dedupState))
+            if (dedup::shouldDrop(std::string(channel), data, len, it->second.dedupState))
             {
                 impl_->dedupCount.fetch_add(1, std::memory_order_relaxed);
-                return true;  // identical value — drop, report success
+                return PublishResult::Ok;  // identical value: nothing to publish
             }
         }
 
-        if (rrb_writer_publish(w, data, static_cast<size_t>(dataLen)) != 0) return false;
+        if (rrb_writer_publish(w, data, len) != 0) return PublishResult::TooBig;
         if (options.reliable)
-            impl_->recordReliable(channel, data, dataLen, options);
-        return true;
+            impl_->recordReliable(std::string(channel), data, static_cast<int>(len), options);
+        return PublishResult::Ok;
     }
 
-    bool Transport::subscribeRaw(const std::string& channel, RawHandler handler,
-                                 const SubscribeOptions& options)
+    bool Transport::subscribe_typed(std::string_view channel, const char* type_name,
+                                    RawHandler handler, const SubscribeOptions& options)
+    {
+        const channels::ChannelInfo* info = channels::find_channel(channel);
+        if (!info || (type_name && info->type != type_name)) return false;
+        return subscribe_raw(channel, std::move(handler), options);
+    }
+
+    bool Transport::subscribe_raw(std::string_view channel, RawHandler handler,
+                                  const SubscribeOptions& options)
     {
         if (!impl_ || !impl_->isAlive() || !handler) return false;
+        if (!channels::find_channel(channel)) return false;
 
         // Reliable subscriber: wrap the handler so every received frame is
         // ACKed (correlated by the command's timestamp) and re-sends are
@@ -675,18 +714,18 @@ namespace raccoon
         // longer reflects reality — wake it so it re-snapshots and
         // includes the new reader's wake_seq. Adding only a handler to
         // an existing channel doesn't need a wake.
-        if (fresh_channel) wakeControl();
+        if (fresh_channel) wake_control();
         return true;
     }
 
-    void Transport::setReliableEventHandler(ReliableEventHandler handler)
+    void Transport::set_reliable_event_handler(ReliableEventHandler handler)
     {
         if (!impl_) return;
         std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
         impl_->reliableHandler = std::move(handler);
     }
 
-    int Transport::spinOnce(int timeoutMs)
+    int Transport::spin_once(int timeout_ms)
     {
         if (!impl_ || !impl_->isAlive()) return 0;
 
@@ -779,19 +818,19 @@ namespace raccoon
 
         // Idle path: pure event-driven park. The control word goes into
         // the futex_waitv list alongside every subscriber's wake_seq.
-        // Wakes within microseconds on ANY publish OR on a wakeControl()
-        // call from subscribe / shutdown / stop. The `timeoutMs`
+        // Wakes within microseconds on ANY publish OR on a wake_control()
+        // call from subscribe / shutdown / stop. The `timeout_ms`
         // argument is now a watchdog upper bound — a sane caller passes
         // something on the order of seconds; the thread does NOT poll
         // and does NOT wake periodically otherwise.
         //
-        // timeoutMs == 0 keeps `spinOnce` non-blocking: return immediately
+        // timeout_ms == 0 keeps `spin_once` non-blocking: return immediately
         // after the pass-1 drain. This preserves the historical contract
         // for callers that only want to flush pending frames once
         // (tests, manual ticks).
-        if (delivered == 0 && timeoutMs > 0)
+        if (delivered == 0 && timeout_ms > 0)
         {
-            int timeoutUs = timeoutMs * 1000;
+            int timeout_us = timeout_ms * 1000;
             uint32_t controlExpected =
                 impl_->controlSeq.load(std::memory_order_acquire);
 
@@ -821,7 +860,7 @@ namespace raccoon
                 std::vector<Transport::RawHandler> handlersCopy;
                 {
                     // recordLatency takes its own lock; the handler list is
-                    // guarded by apiMutex (subscribeRaw appends to it).
+                    // guarded by apiMutex (subscribe_raw appends to it).
                     std::lock_guard<std::recursive_mutex> lk(c->t->impl_->apiMutex);
                     handlersCopy = sub->handlers;
                 }
@@ -843,8 +882,8 @@ namespace raccoon
                 // on the control futex directly using a private
                 // futex_wait — equivalent semantics, no readers needed.
                 struct timespec ts = {
-                    timeoutUs / 1000000,
-                    (long)(timeoutUs % 1000000) * 1000L,
+                    timeout_us / 1000000,
+                    (long)(timeout_us % 1000000) * 1000L,
                 };
                 (void)syscall(SYS_futex, &impl_->controlSeq, FUTEX_WAIT,
                               controlExpected, &ts, nullptr, 0);
@@ -855,7 +894,7 @@ namespace raccoon
                     readers.data(), readers.size(),
                     reinterpret_cast<uint32_t*>(&impl_->controlSeq),
                     controlExpected,
-                    cb, &ctx, timeoutUs);
+                    cb, &ctx, timeout_us);
             }
         }
 
@@ -870,33 +909,33 @@ namespace raccoon
     {
         while (impl_ && impl_->isAlive())
         {
-            spinOnce(10);
+            spin_once(10);
         }
     }
 
     void Transport::stop()
     {
         if (impl_) impl_->running.store(false);
-        wakeControl();  // unblock any thread parked in spinOnce
+        wake_control();  // unblock any thread parked in spin_once
     }
 
     void Transport::shutdown()
     {
         if (!impl_) return;
-        // Impl::shutdown() wakes any thread parked in spinOnce() and waits (for a
+        // Impl::shutdown() wakes any thread parked in spin_once() and waits (for a
         // bounded time) until those calls have returned, then releases the
         // readers and writers.
         impl_->shutdown();
     }
 
-    void Transport::setHandlerErrorHandler(HandlerErrorHandler handler)
+    void Transport::set_handler_error_handler(HandlerErrorHandler handler)
     {
         if (!impl_) return;
         std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
         impl_->handlerErrorHandler = std::move(handler);
     }
 
-    void Transport::wakeControl()
+    void Transport::wake_control()
     {
         if (!impl_) return;
         // Bump the value (release-ordered against any state the waker
@@ -963,31 +1002,31 @@ namespace raccoon
         if (result > 0) ++impl_->spinActiveCount; else ++impl_->spinIdleCount;
     }
 
-    TransportStats Transport::getAndResetStats()
+    TransportStats Transport::get_and_reset_stats()
     {
         TransportStats out{};
         if (!impl_) return out;
         std::lock_guard<std::mutex> lk(impl_->statsMutex);
 
         auto fillLat = [](TransportStats::Latency& o,
-                          int64_t minUs, int64_t maxUs, int64_t sumUs,
+                          int64_t min_us, int64_t max_us, int64_t sumUs,
                           uint64_t count) {
             o.count = count;
             if (count) {
-                o.minUs = minUs;
-                o.maxUs = maxUs;
-                o.avgUs = sumUs / (int64_t)count;
-                o.p99Us = maxUs;  // we don't keep samples for true p99;
+                o.min_us = min_us;
+                o.max_us = max_us;
+                o.avg_us = sumUs / (int64_t)count;
+                o.p99_us = max_us;  // we don't keep samples for true p99;
                                   // surface max as a conservative upper bound
             }
         };
         auto fillCb = [](TransportStats::Callback& o,
-                         int64_t minUs, int64_t maxUs, int64_t sumUs,
+                         int64_t min_us, int64_t max_us, int64_t sumUs,
                          uint64_t count) {
-            o.count = count; o.totalUs = sumUs;
+            o.count = count; o.total_us = sumUs;
             if (count) {
-                o.minUs = minUs; o.maxUs = maxUs;
-                o.avgUs = sumUs / (int64_t)count;
+                o.min_us = min_us; o.max_us = max_us;
+                o.avg_us = sumUs / (int64_t)count;
             }
         };
 
@@ -996,20 +1035,20 @@ namespace raccoon
         fillCb(out.callback, impl_->callbackMinUs, impl_->callbackMaxUs,
                impl_->callbackSumUs, impl_->callbackCount);
         out.spin.count = impl_->spinCount;
-        out.spin.activeCount = impl_->spinActiveCount;
-        out.spin.idleCount = impl_->spinIdleCount;
+        out.spin.active_count = impl_->spinActiveCount;
+        out.spin.idle_count = impl_->spinIdleCount;
         if (impl_->spinCount) {
-            out.spin.minUs = impl_->spinMinUs;
-            out.spin.maxUs = impl_->spinMaxUs;
-            out.spin.avgUs = impl_->spinSumUs / (int64_t)impl_->spinCount;
+            out.spin.min_us = impl_->spinMinUs;
+            out.spin.max_us = impl_->spinMaxUs;
+            out.spin.avg_us = impl_->spinSumUs / (int64_t)impl_->spinCount;
         }
-        out.publishesDeduplicated =
+        out.publishes_deduplicated =
             impl_->dedupCount.exchange(0, std::memory_order_relaxed);
-        out.reliableRetransmits =
-            impl_->reliableRetransmits.exchange(0, std::memory_order_relaxed);
-        out.reliableDropped =
-            impl_->reliableDropped.exchange(0, std::memory_order_relaxed);
-        out.handlerErrors =
+        out.reliable_retransmits =
+            impl_->reliable_retransmits.exchange(0, std::memory_order_relaxed);
+        out.reliable_dropped =
+            impl_->reliable_dropped.exchange(0, std::memory_order_relaxed);
+        out.handler_errors =
             impl_->handlerErrorTotal.exchange(0, std::memory_order_relaxed);
 
         for (auto& [ch, acc] : impl_->channelStats) {

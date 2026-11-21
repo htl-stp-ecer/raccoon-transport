@@ -8,7 +8,7 @@
 // existed but was a no-op. These tests pin the new contract:
 //   1. a reliable command is re-sent until the subscriber ACKs it,
 //   2. re-sends are de-duplicated (handler fires once per unique command),
-//   3. with no subscriber the publisher gives up after maxRetries and says so,
+//   3. with no subscriber the publisher gives up after max_retries and says so,
 //   4. the whole loop closes ACROSS PROCESSES (robot ↔ stm32-data-reader).
 
 #include "raccoon/Transport.h"
@@ -30,6 +30,11 @@
 
 #include <unistd.h>
 #include <sys/wait.h>
+
+namespace
+{
+    inline bool ok(raccoon::PublishResult r) { return r == raccoon::PublishResult::Ok; }
+}
 
 namespace
 {
@@ -69,13 +74,13 @@ namespace
         explicit Spinner(raccoon::Transport& t) : t_(t)
         {
             worker_ = std::thread([this] {
-                while (!stop_.load()) t_.spinOnce(20);
+                while (!stop_.load()) t_.spin_once(20);
             });
         }
         ~Spinner()
         {
             stop_.store(true);
-            t_.wakeControl();
+            t_.wake_control();
             if (worker_.joinable()) worker_.join();
         }
 
@@ -113,7 +118,7 @@ namespace
         cleanAll();
         raccoon::Transport sub = raccoon::Transport::create();
         std::atomic<int> count{0};
-        require(sub.subscribeRaw(kChannel,
+        require(sub.subscribe_raw(kChannel,
                     [&count](const void*, int) { count.fetch_add(1); },
                     raccoon::SubscribeOptions{.reliable = true}),
                 "subscribe failed");
@@ -124,10 +129,10 @@ namespace
         auto payload = makePayload(/*ts=*/1000, /*value=*/-1300);
         raccoon::PublishOptions po;
         po.reliable = true;
-        po.retryInterval = std::chrono::milliseconds(20);
-        po.maxRetries = 10;
-        require(pub.publishRaw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po),
+        po.retry_interval = std::chrono::milliseconds(20);
+        po.max_retries = 10;
+        require(ok(pub.publish_raw(kChannel, payload.data(),
+                               static_cast<int>(payload.size()), po)),
                 "publish failed");
 
         require(waitFor([&] { return count.load() >= 1; },
@@ -139,10 +144,10 @@ namespace
         require(count.load() == 1,
                 "reliable command delivered " + std::to_string(count.load()) +
                     " times, expected exactly 1 (dedup broken)");
-        auto stats = pub.getAndResetStats();
-        require(stats.reliableDropped == 0,
+        auto stats = pub.get_and_reset_stats();
+        require(stats.reliable_dropped == 0,
                 "publisher gave up on an ACKed command (dropped=" +
-                    std::to_string(stats.reliableDropped) + ")");
+                    std::to_string(stats.reliable_dropped) + ")");
     }
 
     // 2. Dedup under forced retransmission: the subscriber starts draining
@@ -153,7 +158,7 @@ namespace
         cleanAll();
         raccoon::Transport sub = raccoon::Transport::create();
         std::atomic<int> count{0};
-        require(sub.subscribeRaw(kChannel,
+        require(sub.subscribe_raw(kChannel,
                     [&count](const void*, int) { count.fetch_add(1); },
                     raccoon::SubscribeOptions{.reliable = true}),
                 "subscribe failed");
@@ -164,10 +169,10 @@ namespace
         auto payload = makePayload(/*ts=*/2000, /*value=*/-1300);
         raccoon::PublishOptions po;
         po.reliable = true;
-        po.retryInterval = std::chrono::milliseconds(20);
-        po.maxRetries = 50;
-        require(pub.publishRaw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po),
+        po.retry_interval = std::chrono::milliseconds(20);
+        po.max_retries = 50;
+        require(ok(pub.publish_raw(kChannel, payload.data(),
+                               static_cast<int>(payload.size()), po)),
                 "publish failed");
 
         // Let the retry thread fire several retransmits with no ACK.
@@ -184,13 +189,13 @@ namespace
         require(count.load() == 1,
                 "reliable command delivered " + std::to_string(count.load()) +
                     " times despite dedup, expected exactly 1");
-        auto stats = pub.getAndResetStats();
-        require(stats.reliableRetransmits >= 1,
+        auto stats = pub.get_and_reset_stats();
+        require(stats.reliable_retransmits >= 1,
                 "expected at least one retransmit while subscriber was silent");
     }
 
-    // 3. Bounded give-up: with no subscriber, the publisher retries maxRetries
-    //    times and then drops the command, incrementing reliableDropped (the
+    // 3. Bounded give-up: with no subscriber, the publisher retries max_retries
+    //    times and then drops the command, incrementing reliable_dropped (the
     //    loud, chase-worthy visibility signal).
     void testReliableGivesUpWithoutSubscriber()
     {
@@ -199,16 +204,16 @@ namespace
         auto payload = makePayload(/*ts=*/3000, /*value=*/-1300);
         raccoon::PublishOptions po;
         po.reliable = true;
-        po.retryInterval = std::chrono::milliseconds(20);
-        po.maxRetries = 3;
-        require(pub.publishRaw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po),
+        po.retry_interval = std::chrono::milliseconds(20);
+        po.max_retries = 3;
+        require(ok(pub.publish_raw(kChannel, payload.data(),
+                               static_cast<int>(payload.size()), po)),
                 "publish failed");
 
         require(waitFor(
                     [&] {
-                        auto s = pub.getAndResetStats();
-                        return s.reliableDropped >= 1;
+                        auto s = pub.get_and_reset_stats();
+                        return s.reliable_dropped >= 1;
                     },
                     std::chrono::seconds(2)),
                 "publisher never gave up on an undeliverable reliable command");
@@ -228,7 +233,7 @@ namespace
         {
             raccoon::Transport rx = raccoon::Transport::create();
             std::atomic<bool> got{false};
-            rx.subscribeRaw(kChannel,
+            rx.subscribe_raw(kChannel,
                             [&got](const void*, int) { got.store(true); },
                             raccoon::SubscribeOptions{.reliable = true});
             const auto deadline =
@@ -236,11 +241,11 @@ namespace
             while (!got.load() &&
                    std::chrono::steady_clock::now() < deadline)
             {
-                rx.spinOnce(20);
+                rx.spin_once(20);
             }
             // Keep spinning briefly so the ACK is actually flushed to the
             // publisher before we exit.
-            for (int i = 0; i < 20; ++i) rx.spinOnce(5);
+            for (int i = 0; i < 20; ++i) rx.spin_once(5);
             rx.shutdown();
             _exit(got.load() ? 0 : 1);
         }
@@ -251,10 +256,10 @@ namespace
         auto payload = makePayload(/*ts=*/4000, /*value=*/-1300);
         raccoon::PublishOptions po;
         po.reliable = true;
-        po.retryInterval = std::chrono::milliseconds(30);
-        po.maxRetries = 100;
-        require(pub.publishRaw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po),
+        po.retry_interval = std::chrono::milliseconds(30);
+        po.max_retries = 100;
+        require(ok(pub.publish_raw(kChannel, payload.data(),
+                               static_cast<int>(payload.size()), po)),
                 "publish failed");
 
         int status = 0;
@@ -265,8 +270,8 @@ namespace
         // The child ACKed before exiting; give the parent's retry thread a
         // moment to consume it, then confirm no give-up occurred.
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        auto stats = pub.getAndResetStats();
-        require(stats.reliableDropped == 0,
+        auto stats = pub.get_and_reset_stats();
+        require(stats.reliable_dropped == 0,
                 "publisher gave up despite the child receiving the command");
     }
 
@@ -283,7 +288,7 @@ namespace
         int retransmits = 0;
         int gaveUp = 0;
         std::string lastChannel;
-        pub.setReliableEventHandler(
+        pub.set_reliable_event_handler(
             [&](raccoon::Transport::ReliableEvent ev, const std::string& ch,
                 int64_t, uint32_t) {
                 std::lock_guard<std::mutex> lk(m);
@@ -295,10 +300,10 @@ namespace
         auto payload = makePayload(/*ts=*/5000, /*value=*/-1300);
         raccoon::PublishOptions po;
         po.reliable = true;
-        po.retryInterval = std::chrono::milliseconds(20);
-        po.maxRetries = 3;
-        require(pub.publishRaw(kChannel, payload.data(),
-                               static_cast<int>(payload.size()), po),
+        po.retry_interval = std::chrono::milliseconds(20);
+        po.max_retries = 3;
+        require(ok(pub.publish_raw(kChannel, payload.data(),
+                               static_cast<int>(payload.size()), po)),
                 "publish failed");
 
         require(waitFor(

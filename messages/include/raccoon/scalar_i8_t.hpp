@@ -6,6 +6,8 @@ namespace raccoon
 {
     struct scalar_i8_t
     {
+        static constexpr const char* type_name = "scalar_i8_t";
+
         int64_t timestamp = 0;
         int8_t dir = 0;
 

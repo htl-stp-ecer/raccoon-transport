@@ -8,6 +8,8 @@ namespace raccoon
 {
     struct envelope_t
     {
+        static constexpr const char* type_name = "envelope_t";
+
         int64_t timestamp = 0;
         std::string publisher_id;
         int64_t seq_num = 0;
