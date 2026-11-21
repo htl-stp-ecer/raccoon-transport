@@ -100,7 +100,7 @@ The slot size of a message type with a fixed size follows from the type (`contra
 ctest --test-dir build --output-on-failure
 ```
 
-The suites cover the ring (`test_ring_robust`, `test_multi_producer_ring`, `test_producer_restart`, `test_reader_recv_robust`), the transport lifecycle (`test_lifecycle_robust`), reliable delivery, the unit tests and the contract check.
+The suites cover the ring (`test_ring`), the transport lifecycle (`test_lifecycle_robust`), reliable delivery, the unit tests and the contract check.
 
 The lifecycle and ring tests are meant to run under a sanitizer as well. Configure a separate build:
 

@@ -6,6 +6,7 @@
 // raccoon::dedup to publishes.
 
 #include "raccoon_ring_bridge.h"
+#include "raccoon/ChannelTable.h"
 #include "raccoon/Dedup.h"
 #include "raccoon/raccoon_ring.h"
 
@@ -90,19 +91,6 @@ struct BridgePublisher {
     BridgeNode* node;
     std::string channel;
 };
-
-// Compute (slot_count, max_payload) for a ring sized to fit `size_hint`
-// bytes with 2× headroom: ~128 KiB total memory budget, ≥4 slots. Matches
-// the policy in raccoon::Transport::Impl::sizeRing so a bridge-published
-// channel ends up with the same shape a Transport-published one would.
-void ring_dims(size_t size_hint, size_t& slots, size_t& want) {
-    want = (size_hint ? size_hint : 1) * 2;
-    if (want < RRB_DEFAULT_MAX_PAYLOAD) want = RRB_DEFAULT_MAX_PAYLOAD;
-    want = ((want + 255) / 256) * 256;
-    slots = (128u * 1024u) / want;
-    if (slots < 4) slots = 4;
-    if (slots > RRB_DEFAULT_SLOT_COUNT) slots = RRB_DEFAULT_SLOT_COUNT;
-}
 
 struct BridgeSubscriber {
     BridgeNode* node;
@@ -239,21 +227,23 @@ int raccoon_ring_bridge_publisher_send_ex(void* p, const uint8_t* data,
                                           size_t len, int deduplicate) {
     if (!p || !data || len == 0) return -1;
     auto* pub = static_cast<BridgePublisher*>(p);
-    // The whole publish runs under pubs_mtx: rrb_writer is not thread-safe,
-    // and the grow path below destroys + re-creates the writer — another
-    // thread publishing on the same channel must never see the dangling
-    // handle. Dart is single-isolate so there is no contention in practice.
+    // The whole publish runs under pubs_mtx: an rrb_writer handle is not thread-safe.
     std::lock_guard<std::mutex> lk(pub->node->pubs_mtx);
     PubChannelState* pe;
+    const auto* info = raccoon::channels::find_channel(pub->channel);
+    if (!info) {
+        log_line("publisher_send: '%s' is not in the channel table", pub->channel.c_str());
+        return -2;
+    }
+    if (info->fixed_size ? len != info->payload : len > info->payload) {
+        log_line("publisher_send('%s'): %zu bytes do not fit the channel", pub->channel.c_str(), len);
+        return -3;
+    }
     auto it = pub->node->pubs.find(pub->channel);
     if (it == pub->node->pubs.end()) {
-        size_t slots = 0, want = 0;
-        ring_dims(len, slots, want);
-        rrb_writer_t* nw = rrb_writer_create(pub->channel.c_str(),
-                                             (uint32_t)slots, (uint32_t)want);
+        rrb_writer_t* nw = rrb_writer_open(pub->channel.c_str(), info->slots, info->payload);
         if (!nw) {
-            log_line("publisher_send: rrb_writer_create('%s') failed",
-                     pub->channel.c_str());
+            log_line("publisher_send: rrb_writer_open('%s') failed", pub->channel.c_str());
             return -2;
         }
         pe = &pub->node->pubs[pub->channel];
@@ -267,37 +257,7 @@ int raccoon_ring_bridge_publisher_send_ex(void* p, const uint8_t* data,
         raccoon::dedup::shouldDrop(pub->channel, data, len, pe->dedupState)) {
         return 0;  // duplicate value — report success, publish nothing
     }
-    rrb_writer_t* w = pe->writer;
-    int rc = rrb_writer_publish(w, data, len);
-    if (rc != 0) {
-        // Only failure path in rrb_writer_publish is "payload too big for
-        // the ring's max_payload". Grow-and-republish: tear the writer
-        // down and re-create it with a bigger ring (rrb_writer_create
-        // wipes + re-inits the SHM file in place; readers detect the
-        // slot_size change and re-attach). Mirrors
-        // raccoon::Transport::publishRaw's resize path.
-        log_line("publisher_send('%s') rejected %zu-byte payload — resizing ring",
-                 pub->channel.c_str(), len);
-        size_t slots = 0, want = 0;
-        ring_dims(len, slots, want);
-        rrb_writer_destroy(w);
-        w = rrb_writer_create(pub->channel.c_str(),
-                              (uint32_t)slots, (uint32_t)want);
-        if (!w) {
-            pub->node->pubs.erase(pub->channel);  // invalidates pe
-            log_line("publisher_send: rrb_writer_create('%s') failed during grow",
-                     pub->channel.c_str());
-            return -2;
-        }
-        pe->writer = w;  // references into unordered_map stay valid across insert
-        rc = rrb_writer_publish(w, data, len);
-        if (rc != 0) {
-            log_line("publisher_send('%s') still rejected %zu-byte payload after resize",
-                     pub->channel.c_str(), len);
-            return -3;
-        }
-    }
-    return 0;
+    return rrb_writer_publish(pe->writer, data, len) == 0 ? 0 : -3;
 }
 
 void raccoon_ring_bridge_publisher_destroy(void* p) {
@@ -319,10 +279,14 @@ int raccoon_ring_bridge_subscriber_create(void* n, const char* channel, void** o
             if (!slot) {
                 slot = std::make_shared<SubChannelState>();
                 slot->channel_name = channel;
-                slot->reader = rrb_reader_open(channel);
+                const auto* info = raccoon::channels::find_channel(channel);
+                if (info) {
+                    slot->reader = rrb_reader_open(channel, info->slots, info->payload,
+                                                   info->retained ? RRB_FLAG_RETAINED : 0u);
+                }
                 if (!slot->reader) {
                     node->subs.erase(channel);
-                    log_line("subscriber_create('%s') — rrb_reader_open failed",
+                    log_line("subscriber_create('%s') — not in the channel table or ring not openable",
                              channel);
                     return -2;
                 }

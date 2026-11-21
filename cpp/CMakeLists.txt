@@ -49,29 +49,11 @@ if (BUILD_TESTING)
     add_test(NAME raccoon_transport_contract_check_tests
         COMMAND raccoon_transport_contract_check_tests)
 
-    add_executable(raccoon_transport_producer_restart_tests
-        tests/test_producer_restart.cpp)
-    target_link_libraries(raccoon_transport_producer_restart_tests PRIVATE
-        raccoon_transport)
-    target_include_directories(raccoon_transport_producer_restart_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    add_test(NAME raccoon_transport_producer_restart_tests
-        COMMAND raccoon_transport_producer_restart_tests)
-
     add_executable(raccoon_transport_unit_tests tests/transport_unit_tests.cpp)
     target_link_libraries(raccoon_transport_unit_tests PRIVATE raccoon_transport)
     target_include_directories(raccoon_transport_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_unit_tests COMMAND raccoon_transport_unit_tests)
-
-    add_executable(raccoon_transport_reader_recv_robust_tests
-        tests/test_reader_recv_robust.cpp)
-    target_link_libraries(raccoon_transport_reader_recv_robust_tests PRIVATE
-        raccoon_transport)
-    target_include_directories(raccoon_transport_reader_recv_robust_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    add_test(NAME raccoon_transport_reader_recv_robust_tests
-        COMMAND raccoon_transport_reader_recv_robust_tests)
 
     add_executable(raccoon_transport_single_cold_send_tests
         tests/test_single_cold_send.cpp)
@@ -91,24 +73,6 @@ if (BUILD_TESTING)
     add_test(NAME raccoon_transport_reliable_delivery_tests
         COMMAND raccoon_transport_reliable_delivery_tests)
 
-    add_executable(raccoon_transport_multi_producer_ring_tests
-        tests/test_multi_producer_ring.cpp)
-    target_link_libraries(raccoon_transport_multi_producer_ring_tests PRIVATE
-        raccoon_transport)
-    target_include_directories(raccoon_transport_multi_producer_ring_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    add_test(NAME raccoon_transport_multi_producer_ring_tests
-        COMMAND raccoon_transport_multi_producer_ring_tests)
-
-    add_executable(raccoon_transport_ring_robust_tests
-        tests/test_ring_robust.cpp)
-    target_link_libraries(raccoon_transport_ring_robust_tests PRIVATE
-        raccoon_transport)
-    target_include_directories(raccoon_transport_ring_robust_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    add_test(NAME raccoon_transport_ring_robust_tests
-        COMMAND raccoon_transport_ring_robust_tests)
-
     add_executable(raccoon_transport_lifecycle_robust_tests
         tests/test_lifecycle_robust.cpp)
     target_link_libraries(raccoon_transport_lifecycle_robust_tests PRIVATE
@@ -117,6 +81,12 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_lifecycle_robust_tests
         COMMAND raccoon_transport_lifecycle_robust_tests)
+
+    add_executable(raccoon_transport_ring_tests tests/test_ring.cpp)
+    target_link_libraries(raccoon_transport_ring_tests PRIVATE raccoon_transport)
+    target_include_directories(raccoon_transport_ring_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_ring_tests COMMAND raccoon_transport_ring_tests)
 
     add_executable(raccoon_transport_channel_table_tests
         tests/test_channel_table.cpp)

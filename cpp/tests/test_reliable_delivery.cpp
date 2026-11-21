@@ -2,7 +2,7 @@
 // raccoon_ring SHM backend.
 //
 // Motivation: the cone-pusher lower command
-// (raccoon/motor/3/velocity_cmd = -1300) was published best-effort exactly
+// (hardware/motor/3/cmd/velocity = -1300) was published best-effort exactly
 // once, lost in transport, and the motor sat still — the mode/brake that
 // followed WAS delivered, so the failure was silent. `PublishOptions.reliable`
 // existed but was a no-op. These tests pin the new contract:
@@ -12,6 +12,7 @@
 //   4. the whole loop closes ACROSS PROCESSES (robot ↔ stm32-data-reader).
 
 #include "raccoon/Transport.h"
+#include "raccoon/ChannelTable.h"
 #include "raccoon/Channels.h"
 #include "raccoon/raccoon_ring.h"
 
@@ -96,8 +97,8 @@ namespace
         return pred();
     }
 
-    const std::string kChannel = "raccoon/motor/3/velocity_cmd";
-    const std::string kAck = raccoon::Channels::Protocol::ACK;
+    const std::string kChannel = "hardware/motor/3/cmd/velocity";
+    const std::string kAck = std::string(raccoon::channels::protocol::ACK);
 
     void cleanAll()
     {

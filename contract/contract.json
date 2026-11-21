@@ -1,9 +1,9 @@
 {
-  "hash": "615e93d0ec3c5cf2",
+  "hash": "7eb57953b1e670eb",
   "format": 1,
   "ring": {
     "magic": 1380143682,
-    "version": 3
+    "version": 4
   },
   "channels": [
     "__raccoon/ack",

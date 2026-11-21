@@ -97,7 +97,7 @@ class HashTests(unittest.TestCase):
         self.assertEqual(self.base, self.tree.hash())
 
     def test_ring_version_changes_it(self):
-        self.tree.edit(RING, "#define RRB_VERSION    3u", "#define RRB_VERSION    4u")
+        self.tree.edit(RING, "#define RRB_VERSION    4u", "#define RRB_VERSION    5u")
         self.assertNotEqual(self.base, self.tree.hash())
 
     def test_unsupported_type_is_an_error(self):

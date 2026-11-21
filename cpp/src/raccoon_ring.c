@@ -1,4 +1,4 @@
-// raccoon_ring.c — implementation. See raccoon_ring.h for design rationale.
+// raccoon_ring.c — implementation. See raccoon_ring.h for the design.
 
 // Need _POSIX_C_SOURCE for ftruncate visibility under -std=c11, plus
 // _GNU_SOURCE for syscall() under glibc (it's in <unistd.h> only when
@@ -116,36 +116,24 @@ typedef struct {
     uint32_t magic;
     uint32_t version;
     uint32_t slot_count;
-    uint32_t slot_size;        // sizeof(slot_hdr) + max_payload, rounded up
+    uint32_t slot_size;        // stride of one slot in bytes, a multiple of 64
     uint32_t max_payload;
-    // wake_seq is the futex word producers bump after every successful
-    // publish. Subscribers FUTEX_WAIT on it for event-driven receive
-    // instead of polling — drops idle CPU to 0 and per-publish wake
-    // latency to ~us. uint32_t (futex requirement). Placed BEFORE
-    // producer_seq so its address is 8-byte aligned and the producer_seq
-    // 64-bit atomic stays 8-aligned right after.
+    // Futex word the writers bump after every publish; readers park on it.
     _Atomic uint32_t wake_seq;
-    // v3 addition. Readers inc this before parking in futex_wait and
-    // dec after returning; producers skip the FUTEX_WAKE syscall when
-    // it's 0. The atomic itself is acquire/release-ordered so the
-    // producer's load can't speculatively reorder past the publish.
+    // Readers increment it around their futex wait; a writer skips the FUTEX_WAKE
+    // syscall while it is 0.
     _Atomic uint32_t waiter_count;
-    uint32_t _pad0;                  // align producer_seq to 8 bytes
-    _Atomic uint64_t producer_seq;  // monotonic, slot_idx = (seq-1) % count
-    char     channel_name[128];
-    // Multi-producer additions (they reuse what used to be zeroed padding, so
-    // the layout and RRB_VERSION are unchanged and old readers keep working):
-    //   flags      RRB_FLAG_MULTI_PRODUCER marks a ring that several processes write.
-    //   claim_seq  next slot ticket handed out to writers (fetch_add). producer_seq
-    //              then means "highest published seq" and is advanced by CAS-max.
-    uint32_t flags;
+    uint32_t _pad0;                 // aligns producer_seq to 8 bytes
+    _Atomic uint64_t producer_seq;  // highest published ticket; slot = (ticket-1) % count
+    char     channel_name[128];     // for diagnostics
+    uint32_t flags;                 // RRB_FLAG_*
     uint32_t _pad1;
-    _Atomic uint64_t claim_seq;
-    uint8_t  pad[72];  // align header to 256 bytes (40 + 128 + 4 + 4 + 8 + 72 = 256)
+    _Atomic uint64_t claim_seq;     // last ticket handed out to a writer (fetch_add)
+    uint8_t  pad[72];               // 40 + 128 + 4 + 4 + 8 + 72 = 256
 } ring_hdr_t;
 
 typedef struct {
-    _Atomic uint64_t seq;      // 0 = being written / empty; else = producer seq when published
+    _Atomic uint64_t seq;      // 0 = being written / empty; else the ticket that filled the slot
     uint32_t len;              // payload bytes valid
     uint32_t _reserved;
     uint8_t  data[];           // max_payload bytes
@@ -155,18 +143,14 @@ typedef struct {
 _Static_assert(sizeof(ring_hdr_t) == 256, "header must be 256 bytes");
 _Static_assert(sizeof(slot_hdr_t) == 16,  "slot header must be 16 bytes");
 
-// Round up to multiple of `align` (power of two not required here).
-static size_t round_up(size_t v, size_t align) {
-    return ((v + align - 1) / align) * align;
+#define SLOT_ALIGN 64u
+
+size_t rrb_slot_stride(uint32_t max_payload) {
+    return ((sizeof(slot_hdr_t) + max_payload + SLOT_ALIGN - 1) / SLOT_ALIGN) * SLOT_ALIGN;
 }
 
-static size_t slot_stride(uint32_t max_payload) {
-    // 8-byte align so the next slot's _Atomic uint64_t seq is aligned.
-    return round_up(sizeof(slot_hdr_t) + max_payload, 8);
-}
-
-static size_t file_size_for(uint32_t slot_count, uint32_t max_payload) {
-    return sizeof(ring_hdr_t) + (size_t)slot_count * slot_stride(max_payload);
+size_t rrb_ring_bytes(uint32_t slot_count, uint32_t max_payload) {
+    return sizeof(ring_hdr_t) + (size_t)slot_count * rrb_slot_stride(max_payload);
 }
 
 // A ring geometry is usable when it is self-consistent and the file holds every
@@ -176,376 +160,226 @@ static size_t file_size_for(uint32_t slot_count, uint32_t max_payload) {
 static int geometry_fits(uint32_t slot_count, uint32_t slot_size,
                          uint32_t max_payload, size_t file_bytes) {
     if (slot_count == 0 || max_payload == 0) return 0;
-    if (slot_size != (uint32_t)slot_stride(max_payload)) return 0;
-    return file_bytes >= file_size_for(slot_count, max_payload);
+    if (slot_size != (uint32_t)rrb_slot_stride(max_payload)) return 0;
+    return file_bytes >= rrb_ring_bytes(slot_count, max_payload);
 }
 
-// ---- Path encoding -----------------------------------------------------
+// ---- Path ---------------------------------------------------------------
 
-// raccoon channel names contain slashes ("raccoon/accel/value"). /dev/shm
-// entries are flat: a slash starts a subdirectory which we don't want to
-// create per-channel. Encode slashes as `_2F` (URL-style) and refuse any
-// other character that's awkward in shell globs or file APIs.
-
+// A channel name is 0-9 a-z A-Z _ - and '/' between non-empty segments. In the
+// file name every '/' is a '.', which cannot occur in a name, so the mapping is
+// unambiguous and the directory stays flat.
 int rrb_channel_to_path(const char* channel, char* out_path, size_t out_size) {
-    if (!channel || !out_path || out_size < 32) return -1;
-    const char* prefix = "/dev/shm/raccoon_ring_";
-    size_t pl = strlen(prefix);
-    if (pl >= out_size) return -1;
-    memcpy(out_path, prefix, pl);
-    size_t op = pl;
+    if (!channel || !out_path) return -1;
+    const size_t name_len = strlen(channel);
+    if (name_len == 0 || name_len > RRB_MAX_CHANNEL_NAME) return -1;
+    const size_t dir_len = strlen(RRB_DIR);
+    if (dir_len + 1 + name_len + 1 > out_size) return -1;
+    memcpy(out_path, RRB_DIR, dir_len);
+    size_t op = dir_len;
+    out_path[op++] = '/';
+    char prev = '/';  // a name must not start with '/'
     for (const char* c = channel; *c; ++c) {
-        char ch = *c;
+        const char ch = *c;
         if (ch == '/') {
-            if (op + 3 >= out_size) return -1;
-            out_path[op++] = '_';
-            out_path[op++] = '2';
-            out_path[op++] = 'F';
-            continue;
-        }
-        // Allow alnum + a few harmless punctuation; reject everything else
-        // so we never end up with a path-traversal-shaped filename.
-        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-              (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.')) {
+            if (prev == '/') return -1;  // empty segment
+            out_path[op++] = '.';
+        } else if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                   (ch >= '0' && ch <= '9') || ch == '_' || ch == '-') {
+            out_path[op++] = ch;
+        } else {
             return -1;
         }
-        if (op + 1 >= out_size) return -1;
-        out_path[op++] = ch;
+        prev = ch;
     }
+    if (prev == '/') return -1;  // a name must not end with '/'
     out_path[op] = '\0';
     return 0;
 }
 
-// ---- Common: open shm, mmap header, return base+size -------------------
+// Create the ring directory if needed. It is world-writable (no sticky bit) so
+// that every user can create and re-create ring files.
+static void ensure_ring_dir(void) {
+    if (mkdir(RRB_DIR, 0777) == 0) (void)chmod(RRB_DIR, 0777);  // not subject to the umask
+}
 
-// `create`: 0 = open existing readonly; 1 = open RW + create if missing.
-// Returns 0 on success, -1 on failure. `*out_base` is the mmap region,
-// `*out_size` the file size, `*out_fd` the still-open fd (must be closed
-// after mmap by the caller is fine on Linux — kernel keeps mapping alive).
-static int shm_open_mmap(const char* path,
-                         int create,
-                         uint32_t want_slot_count,
-                         uint32_t want_max_payload,
-                         const char* channel_name,
-                         void** out_base,
-                         size_t* out_size,
-                         int* out_fd) {
-    int flags = create ? (O_CREAT | O_RDWR) : O_RDWR;
-    // RW even for readers: we don't need to write payload, but mapping has
-    // to be MAP_SHARED + PROT_READ to see producer's atomic stores. Some
-    // libcs require RDWR on the fd for MAP_SHARED writable mappings; we
-    // keep things simple by always opening RDWR.
-    int fd = open(path, flags, 0660);
-    if (fd < 0) {
-        if (!create && errno == ENOENT) {
-            // Reader before any producer: not an error, caller handles by
-            // returning a "lazy" handle.
-            return -2;
-        }
-        return -1;
-    }
+// ---- Open or create a ring ---------------------------------------------
 
-    size_t want_size = file_size_for(want_slot_count, want_max_payload);
+// Opens the ring file of `path` under an exclusive flock and returns its mapping.
+//  * A valid ring (magic, version, geometry that fits the file) is attached as-is.
+//    For a writer (`writer` = 1) the geometry must also equal the wanted one;
+//    a reader takes whatever geometry the ring has.
+//  * Otherwise the ring is (re-)initialised with the wanted geometry. The file only
+//    ever grows: readers may have a larger ring mapped, and a page beyond a
+//    shortened end of file raises SIGBUS in them.
+// Returns 0 on success (`*out_fd` stays open for the caller), -1 on failure.
+static int ring_open(const char* path, const char* channel,
+                     uint32_t want_slots, uint32_t want_payload,
+                     uint32_t want_flags, int writer,
+                     void** out_base, size_t* out_size, int* out_fd) {
+    if (want_slots == 0 || want_payload == 0) return -1;
+    ensure_ring_dir();
 
-    if (create) {
+    int fd = -1;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0666);
+        if (fd < 0) return -1;
+        (void)fchmod(fd, 0666);  // not subject to the umask
+        if (flock(fd, LOCK_EX) != 0) { close(fd); return -1; }
         struct stat st;
         if (fstat(fd, &st) != 0) { close(fd); return -1; }
-        // Either a fresh file (size 0) or one left by an earlier run. The header is
-        // re-initialised below. The file only ever grows: readers may have a larger
-        // ring mapped, and a page beyond a shortened end of file raises SIGBUS in
-        // them. A file that is larger than needed keeps its size.
-        if ((size_t)st.st_size < want_size) {
-            if (ftruncate(fd, (off_t)want_size) != 0) {
-                close(fd); return -1;
+        if (st.st_nlink > 0) break;  // not deleted while we waited for the lock
+        close(fd);
+        fd = -1;
+    }
+    if (fd < 0) return -1;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) goto fail;
+    size_t file_bytes = (size_t)st.st_size;
+
+    if (file_bytes >= sizeof(ring_hdr_t)) {
+        void* base = mmap(NULL, file_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (base != MAP_FAILED) {
+            ring_hdr_t* h = (ring_hdr_t*)base;
+            const int valid =
+                h->magic == RRB_MAGIC && h->version == RRB_VERSION &&
+                geometry_fits(h->slot_count, h->slot_size, h->max_payload, file_bytes);
+            const int same =
+                h->slot_count == want_slots && h->max_payload == want_payload;
+            if (valid && (!writer || same)) {
+                *out_base = base;
+                *out_size = file_bytes;
+                *out_fd = fd;
+                (void)flock(fd, LOCK_UN);
+                return 0;
             }
-        } else {
-            want_size = (size_t)st.st_size;
-        }
-    } else {
-        struct stat st;
-        if (fstat(fd, &st) != 0) { close(fd); return -1; }
-        want_size = (size_t)st.st_size;
-        if (want_size < sizeof(ring_hdr_t)) {
-            // Producer hasn't initialised yet. Caller treats as lazy.
-            close(fd);
-            return -2;
+            munmap(base, file_bytes);
         }
     }
 
-    void* base = mmap(NULL, want_size, PROT_READ | PROT_WRITE,
-                      MAP_SHARED, fd, 0);
-    if (base == MAP_FAILED) { close(fd); return -1; }
-
-    if (create) {
-        // Initialise (or re-initialise) the header. Writers re-initialise
-        // on every restart — that's fine, the .seq starts back at 0 and
-        // subscribers naturally lose their old last_seen reference.
+    {
+        size_t want_bytes = rrb_ring_bytes(want_slots, want_payload);
+        if (file_bytes < want_bytes) {
+            if (ftruncate(fd, (off_t)want_bytes) != 0) goto fail;
+        } else {
+            want_bytes = file_bytes;
+        }
+        void* base = mmap(NULL, want_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (base == MAP_FAILED) goto fail;
         ring_hdr_t* h = (ring_hdr_t*)base;
-        // Readers may be parked in a futex wait on this very ring (a long-running service
-        // while a new program starts). wake_seq and waiter_count are THEIR state, shared
-        // with the writer: resetting waiter_count to 0 makes the writer believe nobody
-        // waits, it skips FUTEX_WAKE and the parked reader only wakes when its own
-        // timeout runs out (up to a second late). So an existing ring with the same
-        // layout keeps both; only a new or re-laid-out ring starts from zero.
+        const uint32_t stride = (uint32_t)rrb_slot_stride(want_payload);
+        // Parked readers and the writers share wake_seq and waiter_count; a ring that
+        // already has this geometry keeps both. Resetting waiter_count would make the
+        // writers skip the FUTEX_WAKE and a parked reader would wake only on timeout.
         const int same_layout =
             h->magic == RRB_MAGIC && h->version == RRB_VERSION &&
-            h->slot_count == want_slot_count &&
-            h->slot_size == (uint32_t)slot_stride(want_max_payload) &&
-            h->max_payload == want_max_payload;
+            h->slot_count == want_slots && h->slot_size == stride &&
+            h->max_payload == want_payload;
         // Readers that attach while the header is rewritten see no magic and treat
         // the ring as not ready; the magic is stored last.
         __atomic_store_n(&h->magic, 0u, __ATOMIC_RELEASE);
         h->version     = RRB_VERSION;
-        h->slot_count  = want_slot_count;
-        h->slot_size   = (uint32_t)slot_stride(want_max_payload);
-        h->max_payload = want_max_payload;
-        h->flags       = 0;  // a single-producer ring
+        h->slot_count  = want_slots;
+        h->slot_size   = stride;
+        h->max_payload = want_payload;
+        h->flags       = want_flags;
         atomic_store_explicit(&h->claim_seq, 0, memory_order_release);
         atomic_store_explicit(&h->producer_seq, 0, memory_order_release);
         if (!same_layout) {
             atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
             atomic_store_explicit(&h->waiter_count, 0u, memory_order_release);
         }
-        strncpy(h->channel_name, channel_name, sizeof(h->channel_name) - 1);
-        h->channel_name[sizeof(h->channel_name) - 1] = '\0';
-        // Zero every slot's seq field so the first publish wraps cleanly.
+        memset(h->channel_name, 0, sizeof(h->channel_name));
+        strncpy(h->channel_name, channel, sizeof(h->channel_name) - 1);
         uint8_t* slot_base = (uint8_t*)base + sizeof(ring_hdr_t);
-        size_t stride = h->slot_size;
-        for (uint32_t i = 0; i < want_slot_count; ++i) {
+        for (uint32_t i = 0; i < want_slots; ++i) {
             slot_hdr_t* s = (slot_hdr_t*)(slot_base + (size_t)i * stride);
             atomic_store_explicit(&s->seq, 0, memory_order_release);
             s->len = 0;
         }
         __atomic_store_n(&h->magic, RRB_MAGIC, __ATOMIC_RELEASE);
+        *out_base = base;
+        *out_size = want_bytes;
+        *out_fd = fd;
+        (void)flock(fd, LOCK_UN);
+        return 0;
     }
 
-    *out_base = base;
-    *out_size = want_size;
-    *out_fd   = fd;
-    return 0;
+fail:
+    (void)flock(fd, LOCK_UN);
+    close(fd);
+    return -1;
 }
 
 // ---- Writer ------------------------------------------------------------
 
+// The writer works with the geometry it opened the ring with, not with the shared
+// header: whatever another process writes there, the writer stays inside the file
+// it has mapped.
 struct rrb_writer_s {
-    char        path[512];
     int         fd;
     void*       base;
     size_t      size;
     ring_hdr_t* hdr;
-    uint8_t*    slots;     // points to slot 0
-    size_t      stride;    // slot_size from header
-    int         multi;     // 1: ring has several writers (claim slots with fetch_add)
+    uint8_t*    slots;       // points to slot 0
+    size_t      stride;
+    uint32_t    slot_count;
+    uint32_t    max_payload;
 };
 
-rrb_writer_t* rrb_writer_create(const char* channel,
-                                uint32_t slot_count,
-                                uint32_t max_payload) {
+rrb_writer_t* rrb_writer_open(const char* channel,
+                              uint32_t slot_count,
+                              uint32_t max_payload) {
     if (!channel || slot_count == 0 || max_payload == 0) return NULL;
+    char path[256];
+    if (rrb_channel_to_path(channel, path, sizeof(path)) != 0) return NULL;
 
     rrb_writer_t* w = calloc(1, sizeof(*w));
     if (!w) return NULL;
-    if (rrb_channel_to_path(channel, w->path, sizeof(w->path)) != 0) {
-        free(w); return NULL;
+    if (ring_open(path, channel, slot_count, max_payload, 0, /*writer=*/1,
+                  &w->base, &w->size, &w->fd) != 0) {
+        free(w);
+        return NULL;
     }
-    int rc = shm_open_mmap(w->path, /*create=*/1, slot_count, max_payload,
-                           channel, &w->base, &w->size, &w->fd);
-    if (rc != 0) { free(w); return NULL; }
-
-    w->hdr   = (ring_hdr_t*)w->base;
-    w->slots = (uint8_t*)w->base + sizeof(ring_hdr_t);
-    w->stride = w->hdr->slot_size;
+    w->hdr         = (ring_hdr_t*)w->base;
+    w->slots       = (uint8_t*)w->base + sizeof(ring_hdr_t);
+    w->stride      = rrb_slot_stride(max_payload);
+    w->slot_count  = slot_count;
+    w->max_payload = max_payload;
     return w;
-}
-
-// Multi-producer ring: attach to an existing valid multi-producer ring without
-// touching it, or initialise it. flock() serialises concurrent first-time
-// initialisation by several processes.
-rrb_writer_t* rrb_writer_create_multi(const char* channel,
-                                      uint32_t slot_count,
-                                      uint32_t max_payload) {
-    if (!channel || slot_count == 0 || max_payload == 0) return NULL;
-
-    rrb_writer_t* w = calloc(1, sizeof(*w));
-    if (!w) return NULL;
-    w->fd = -1;
-    if (rrb_channel_to_path(channel, w->path, sizeof(w->path)) != 0) {
-        free(w); return NULL;
-    }
-    w->fd = open(w->path, O_CREAT | O_RDWR, 0660);
-    if (w->fd < 0) { free(w); return NULL; }
-    if (flock(w->fd, LOCK_EX) != 0) { close(w->fd); free(w); return NULL; }
-
-    struct stat st;
-    if (fstat(w->fd, &st) != 0) goto fail;
-
-    // Attach as-is when the file already holds a valid multi-producer ring.
-    // The ring keeps the geometry its first creator chose; publish() checks
-    // payloads against the header's max_payload.
-    if ((size_t)st.st_size >= sizeof(ring_hdr_t)) {
-        void* base = mmap(NULL, (size_t)st.st_size, PROT_READ | PROT_WRITE,
-                          MAP_SHARED, w->fd, 0);
-        if (base != MAP_FAILED) {
-            ring_hdr_t* h = (ring_hdr_t*)base;
-            if (h->magic == RRB_MAGIC && h->version == RRB_VERSION &&
-                (h->flags & RRB_FLAG_MULTI_PRODUCER) &&
-                h->slot_count > 0 && h->max_payload > 0 &&
-                h->slot_size == slot_stride(h->max_payload) &&
-                (size_t)st.st_size >= file_size_for(h->slot_count, h->max_payload)) {
-                w->base = base;
-                w->size = (size_t)st.st_size;
-            } else {
-                munmap(base, (size_t)st.st_size);
-            }
-        }
-    }
-
-    if (!w->base) {
-        // Fresh file, or a stale/incompatible ring: (re-)initialise it.
-        size_t want_size = file_size_for(slot_count, max_payload);
-        if ((size_t)st.st_size < want_size) {
-            if (ftruncate(w->fd, (off_t)want_size) != 0) goto fail;
-        } else {
-            want_size = (size_t)st.st_size;  // the file never shrinks (see shm_open_mmap)
-        }
-        void* base = mmap(NULL, want_size, PROT_READ | PROT_WRITE,
-                          MAP_SHARED, w->fd, 0);
-        if (base == MAP_FAILED) goto fail;
-        ring_hdr_t* h = (ring_hdr_t*)base;
-        // Keep wake_seq/waiter_count of an existing ring with this layout (see shm_open_mmap).
-        const int same_layout =
-            h->magic == RRB_MAGIC && h->version == RRB_VERSION &&
-            h->slot_count == slot_count &&
-            h->slot_size == (uint32_t)slot_stride(max_payload) &&
-            h->max_payload == max_payload;
-        h->magic = 0;  // readers treat the ring as "not ready" until the end
-        h->version = RRB_VERSION;
-        h->slot_count = slot_count;
-        h->slot_size = (uint32_t)slot_stride(max_payload);
-        h->max_payload = max_payload;
-        h->flags = RRB_FLAG_MULTI_PRODUCER;
-        atomic_store_explicit(&h->producer_seq, 0, memory_order_release);
-        atomic_store_explicit(&h->claim_seq, 0, memory_order_release);
-        if (!same_layout) {
-            atomic_store_explicit(&h->wake_seq, 0u, memory_order_release);
-            atomic_store_explicit(&h->waiter_count, 0u, memory_order_release);
-        }
-        strncpy(h->channel_name, channel, sizeof(h->channel_name) - 1);
-        h->channel_name[sizeof(h->channel_name) - 1] = '\0';
-        uint8_t* slot_base = (uint8_t*)base + sizeof(ring_hdr_t);
-        size_t stride = h->slot_size;
-        for (uint32_t i = 0; i < slot_count; ++i) {
-            slot_hdr_t* sl = (slot_hdr_t*)(slot_base + (size_t)i * stride);
-            atomic_store_explicit(&sl->seq, 0, memory_order_release);
-            sl->len = 0;
-        }
-        __atomic_store_n(&h->magic, RRB_MAGIC, __ATOMIC_RELEASE);
-        w->base = base;
-        w->size = want_size;
-    }
-
-    w->hdr    = (ring_hdr_t*)w->base;
-    w->slots  = (uint8_t*)w->base + sizeof(ring_hdr_t);
-    w->stride = w->hdr->slot_size;
-    w->multi  = 1;
-    (void)flock(w->fd, LOCK_UN);
-    return w;
-
-fail:
-    (void)flock(w->fd, LOCK_UN);
-    close(w->fd);
-    free(w);
-    return NULL;
 }
 
 int rrb_writer_publish(rrb_writer_t* w, const void* data, size_t len) {
-    if (!w || !data) return -1;
-    if (len > w->hdr->max_payload) return -1;
+    if (!w || (!data && len > 0)) return -1;
+    if (len > w->max_payload) return RRB_PUBLISH_TOO_BIG;
 
-    if (w->multi) {
-        // Multi-producer: take a private slot ticket, fill the slot, then
-        // advance producer_seq to the highest published ticket (CAS-max, since
-        // writers can finish out of order).
-        // producer_seq must never be ahead of the tickets: something else (a
-        // writer from before multi-producer, or a ring that was reset in place)
-        // can leave it higher than claim_seq, and then no new ticket would ever
-        // raise it and readers would never see another frame. Lift claim_seq
-        // above it first, so new tickets always advance producer_seq.
-        uint64_t seen = atomic_load_explicit(&w->hdr->producer_seq,
-                                             memory_order_acquire);
-        uint64_t tickets = atomic_load_explicit(&w->hdr->claim_seq,
-                                                memory_order_relaxed);
-        while (tickets < seen &&
-               !atomic_compare_exchange_weak_explicit(
-                   &w->hdr->claim_seq, &tickets, seen,
-                   memory_order_acq_rel, memory_order_relaxed)) {
-        }
-        uint64_t claim = atomic_fetch_add_explicit(&w->hdr->claim_seq, 1,
-                                                   memory_order_acq_rel) + 1;
-        slot_hdr_t* ms = (slot_hdr_t*)(w->slots +
-            (size_t)((claim - 1) % w->hdr->slot_count) * w->stride);
-        atomic_store_explicit(&ms->seq, 0, memory_order_release);
-        ms->len = (uint32_t)len;
-        memcpy(ms->data, data, len);
-        atomic_store_explicit(&ms->seq, claim, memory_order_release);
-        uint64_t cur = atomic_load_explicit(&w->hdr->producer_seq,
-                                            memory_order_relaxed);
-        while (cur < claim &&
-               !atomic_compare_exchange_weak_explicit(
-                   &w->hdr->producer_seq, &cur, claim,
-                   memory_order_release, memory_order_relaxed)) {
-        }
-        atomic_fetch_add_explicit(&w->hdr->wake_seq, 1u, memory_order_release);
-        if (atomic_load_explicit(&w->hdr->waiter_count,
-                                 memory_order_acquire) > 0u) {
-            (void)futex_wake_all(&w->hdr->wake_seq);
-        }
-        return 0;
+    // Take a private slot ticket, fill the slot, then advance producer_seq to the
+    // highest published ticket (CAS-max: writers can finish out of order).
+    const uint64_t claim = atomic_fetch_add_explicit(&w->hdr->claim_seq, 1,
+                                                     memory_order_acq_rel) + 1;
+    slot_hdr_t* s = (slot_hdr_t*)(w->slots +
+        (size_t)((claim - 1) % w->slot_count) * w->stride);
+    // Tag the slot as in progress: a reader that is copying it sees seq change and
+    // drops the copy.
+    atomic_store_explicit(&s->seq, 0, memory_order_release);
+    s->len = (uint32_t)len;
+    if (len) memcpy(s->data, data, len);
+    atomic_store_explicit(&s->seq, claim, memory_order_release);
+
+    uint64_t cur = atomic_load_explicit(&w->hdr->producer_seq, memory_order_relaxed);
+    while (cur < claim &&
+           !atomic_compare_exchange_weak_explicit(&w->hdr->producer_seq, &cur, claim,
+                                                  memory_order_release,
+                                                  memory_order_relaxed)) {
     }
 
-    // 1) Pick the next sequence number. Single-producer: just += 1.
-    //    seq 1 lives in slot 0, seq 2 in slot 1, ..., seq N in slot N-1.
-    uint64_t cur = atomic_load_explicit(&w->hdr->producer_seq,
-                                        memory_order_relaxed);
-    uint64_t next = cur + 1;
-    uint32_t slot_idx = (uint32_t)((next - 1) % w->hdr->slot_count);
-    slot_hdr_t* s = (slot_hdr_t*)(w->slots + (size_t)slot_idx * w->stride);
-
-    // 2) Tag slot as in-progress so any reader currently copying it sees
-    //    the slot's seq go to 0 and bails out.
-    atomic_store_explicit(&s->seq, 0, memory_order_release);
-
-    // 3) Write payload.
-    s->len = (uint32_t)len;
-    memcpy(s->data, data, len);
-
-    // 4) Publish slot (release fence pairs with subscriber's acquire load
-    //    of slot->seq below).
-    atomic_store_explicit(&s->seq, next, memory_order_release);
-
-    // 5) Make the new producer_seq visible to subscribers polling the
-    //    global counter. Release order: a reader observing producer_seq
-    //    == next must afterwards see slot->seq == next too.
-    atomic_store_explicit(&w->hdr->producer_seq, next, memory_order_release);
-
-    // 6) Bump the futex word and wake every subscriber currently parked
-    //    in rrb_reader_recv_wait(). The increment-then-wake order
-    //    matches the futex protocol: subscribers snapshot wake_seq,
-    //    re-check producer_seq, and FUTEX_WAIT(expected=snapshot). If
-    //    we bump the value between their snapshot and their wait call
-    //    the kernel returns EAGAIN — no lost wakeup. FUTEX_WAKE on a
-    //    word with no waiters is ~50 ns; cheap enough to do every
-    //    publish even at 1 kHz channel rates.
-    atomic_fetch_add_explicit(&w->hdr->wake_seq, 1u,
-                              memory_order_release);
-    // Skip the FUTEX_WAKE syscall when nobody is parked. Telemetry
-    // channels publish at ~100 Hz across ~20 channels; a Pi spending
-    // 2 kHz/s on no-op syscalls is measurable. The waiter_count
-    // load is acquire so it can't be reordered past the publish
-    // (matching the reader's release-ordered increment below — if
-    // they see our publish, we see their bump or they see our wake).
-    if (atomic_load_explicit(&w->hdr->waiter_count,
-                             memory_order_acquire) > 0u) {
+    // Bump the futex word and wake the parked readers. A reader snapshots wake_seq,
+    // re-checks producer_seq and waits with FUTEX_WAIT(expected = snapshot); a bump
+    // between its snapshot and its wait makes the kernel return EAGAIN, so no wake
+    // is lost. The FUTEX_WAKE syscall is skipped while nobody is parked.
+    atomic_fetch_add_explicit(&w->hdr->wake_seq, 1u, memory_order_release);
+    if (atomic_load_explicit(&w->hdr->waiter_count, memory_order_acquire) > 0u) {
         (void)futex_wake_all(&w->hdr->wake_seq);
     }
     return 0;
@@ -555,196 +389,125 @@ void rrb_writer_destroy(rrb_writer_t* w) {
     if (!w) return;
     if (w->base && w->base != MAP_FAILED) munmap(w->base, w->size);
     if (w->fd >= 0) close(w->fd);
-    // Intentionally NOT unlinking the SHM file — subscribers that mmap'd
-    // it keep working until they close, and a producer restart re-uses
-    // the same file in-place via shm_open_mmap(create=1).
+    // The ring file stays: readers keep their mapping and the next writer
+    // attaches to it.
     free(w);
 }
 
 // ---- Reader ------------------------------------------------------------
 
+#define REVALIDATE_INTERVAL_NS 1000000000ull  /* 1 s */
+
 struct rrb_reader_s {
-    char        path[512];
-    char        channel[128];
+    char        path[256];
+    char        channel[RRB_MAX_CHANNEL_NAME + 1];
+    uint32_t    want_slots;    // what the table says; used when the file has to be created
+    uint32_t    want_payload;
+    uint32_t    flags;         // RRB_FLAG_RETAINED
     int         fd;
     void*       base;
     size_t      size;
     ring_hdr_t* hdr;
     uint8_t*    slots;
     size_t      stride;
-    uint32_t    slot_count;  // geometry of the attached ring, read once at attach
-    uint32_t    max_payload; // (the shared header can change under us; these cannot)
-    uint64_t    too_big_seq; // seq of the frame last reported as RRB_RECV_TOO_BIG
-    uint64_t    last_seen;   // last delivered producer_seq
-    uint64_t    last_open_attempt_ns;  // for lazy re-attach throttling
-    uint64_t    stall_seq;       // multi-producer: seq we are waiting on to be written
+    uint32_t    slot_count;    // geometry of the attached ring, read once at attach
+    uint32_t    max_payload;   // (the shared header can change under us; these cannot)
+    uint64_t    too_big_seq;   // ticket of the frame last reported as RRB_RECV_TOO_BIG
+    uint64_t    last_seen;     // last delivered ticket
+    uint64_t    stall_seq;       // ticket we are waiting on to be written
     uint64_t    stall_since_ns;  // ...since when (monotonic)
+    uint64_t    last_check_ns;   // last revalidation
 };
 
-// Detach from the current mmap (if any) and reset fields so the next
-// recv() call triggers a fresh reader_attach(). Safe to call even when
-// the reader is not attached.
+static uint64_t now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
 static void reader_detach(rrb_reader_t* r) {
     if (r->base && r->base != MAP_FAILED) munmap(r->base, r->size);
     if (r->fd >= 0) close(r->fd);
-    r->base   = NULL;
-    r->size   = 0;
-    r->hdr    = NULL;
-    r->slots  = NULL;
-    r->stride = 0;
-    r->slot_count = 0;
+    r->base        = NULL;
+    r->size        = 0;
+    r->hdr         = NULL;
+    r->slots       = NULL;
+    r->stride      = 0;
+    r->slot_count  = 0;
     r->max_payload = 0;
     r->too_big_seq = 0;
-    r->fd     = -1;
-    r->last_seen = 0;
-    r->stall_seq = 0;
+    r->fd          = -1;
+    r->last_seen   = 0;
+    r->stall_seq   = 0;
     r->stall_since_ns = 0;
 }
 
-// Try to attach. Sets the mmap fields if successful; returns 0 on
-// success, -1 on hard error.
-//
-// When the file doesn't exist yet we stay detached and let recv() retry.
-// Readers must not create placeholder rings: if a real producer later
-// materialises the channel with a smaller layout, its ftruncate can shrink
-// the file under the reader's larger mmap and SIGBUS the next access.
-static int reader_attach(rrb_reader_t* r) {
-    int fd = -1;
+// Attach to the ring (creating it if it is missing). `fresh` = 1 starts after the
+// latest frame (the latest frame itself for a retained channel); `fresh` = 0
+// replays everything the ring still holds, which is what a reader wants after the
+// ring was re-initialised under it.
+// Returns 0 on success, -1 when the ring cannot be opened.
+static int reader_attach(rrb_reader_t* r, int fresh) {
     void* base = NULL;
     size_t size = 0;
-    int rc = shm_open_mmap(r->path, /*create=*/0, 0, 0, r->channel,
-                           &base, &size, &fd);
-    if (rc != 0) {
-        return rc;
+    int fd = -1;
+    if (ring_open(r->path, r->channel, r->want_slots, r->want_payload, r->flags,
+                  /*writer=*/0, &base, &size, &fd) != 0) {
+        return -1;
     }
-
     ring_hdr_t* h = (ring_hdr_t*)base;
-    if (h->magic != RRB_MAGIC || h->version != RRB_VERSION) {
-        // Stale ring from an incompatible build, or file is being
-        // written by the producer right now. Treat as lazy.
-        munmap(base, size);
-        close(fd);
-        return -2;
-    }
     // Read the geometry once; a writer may rewrite the shared header at any time.
-    const uint32_t slot_count  = h->slot_count;
-    const uint32_t slot_size   = h->slot_size;
-    const uint32_t max_payload = h->max_payload;
-    if (!geometry_fits(slot_count, slot_size, max_payload, size)) {
-        // The header describes more than the file holds (or is inconsistent):
-        // a writer is mid-initialisation or the file is damaged. Not ready.
-        munmap(base, size);
-        close(fd);
-        return -2;
-    }
     r->fd          = fd;
     r->base        = base;
     r->size        = size;
     r->hdr         = h;
     r->slots       = (uint8_t*)base + sizeof(ring_hdr_t);
-    r->stride      = slot_size;
-    r->slot_count  = slot_count;
-    r->max_payload = max_payload;
+    r->slot_count  = h->slot_count;
+    r->stride      = h->slot_size;
+    r->max_payload = h->max_payload;
     r->too_big_seq = 0;
-    return 0;
-}
-
-int rrb_reader_seek_to_latest(rrb_reader_t* r) {
-    if (!r) return -1;
-    if (!r->base) {
-        int rc = reader_attach(r);
-        if (rc != 0) return rc;
+    r->stall_seq   = 0;
+    r->last_check_ns = now_ns();
+    r->last_seen   = 0;
+    if (fresh) {
+        const uint64_t prod = atomic_load_explicit(&h->producer_seq, memory_order_acquire);
+        r->last_seen = (prod > 0 && (r->flags & RRB_FLAG_RETAINED)) ? prod - 1 : prod;
     }
-    // Retain-on-attach: deliver the LAST published frame on the next
-    // recv() instead of walking the ring from the oldest still-intact
-    // slot. Without this, a fresh subscriber on a slow / dedup'd channel
-    // (e.g. raccoon/imu/heading while the robot sits still — the reader
-    // drops near-duplicate floats so no fresh publish arrives for
-    // seconds) wedges callers like Platform.cpp's waitForImuReady, which
-    // gives up after a 1.5 s timeout even though a perfectly good cached
-    // frame already lives in the ring.
-    //
-    // Producer-restart safety: if producer_seq later resets to a value
-    // < last_seen (rrb_writer_create re-initialised the ring in place),
-    // recv's existing `producer < last_seen → last_seen = 0` branch
-    // catches it and we replay from the start of the new epoch.
-    uint64_t prod = atomic_load_explicit(&r->hdr->producer_seq,
-                                        memory_order_acquire);
-    r->last_seen = (prod > 0) ? (prod - 1) : 0;
     return 0;
 }
 
-// Check whether the underlying SHM file has been unlinked (st_nlink == 0)
-// and, if a replacement file exists at the same path, detach from the
-// orphaned mmap and re-attach to the fresh inode. Returns 0 if still
-// attached (no action taken or re-attach succeeded), -1 on error.
-//
-// This handles producers (e.g. stm32-data-reader) that create the ring
-// file and then immediately unlink it — a common POSIX pattern that
-// keeps the producer's own fd alive but prevents new readers from
-// opening the directory entry. When the producer restarts and creates a
-// fresh file with the same path, old readers see no new data because
-// their mmap points at the deleted (orphaned) inode.  Checking
-// st_nlink == 0 catches this and triggers a transparent re-attach.
-static int reader_reopen_if_unlinked(rrb_reader_t* r) {
-    if (r->fd < 0) return -1;
-    struct stat st;
-    if (fstat(r->fd, &st) != 0) return -1;
-    if (st.st_nlink > 0) return 0;  // still reachable — nothing to do
-
-    // File was unlinked. Detach from the orphaned mmap and re-attach.
-    // reader_attach() will ENOENT => lazy if the new producer hasn't
-    // materialised yet; the next recv() call retries as usual.
-    reader_detach(r);
-    int rc = reader_attach(r);
-    return (rc == 0) ? 0 : -1;
-}
-
-// Touch the SHM file so it shows up in /dev/shm immediately on subscribe
-// even before any producer publishes. Size stays at 0 — reader_attach
-// treats size < sizeof(ring_hdr_t) as "producer hasn't initialised yet"
-// and returns -2 (lazy), so we never mmap an uninitialised file and so
-// can't be SIGBUS'd by a later producer ftruncate. When the producer
-// eventually calls rrb_writer_create, its shm_open_mmap(create=1) finds
-// the existing 0-byte file, ftruncates it up to want_size, and writes
-// the header — exactly as if we'd never touched it.
-//
-// Why bother: callers and ops tools can see "this subscriber is alive
-// and waiting on channel X" by ls'ing /dev/shm, without having to wait
-// for the producer to materialise. Also collapses one ENOENT round-trip
-// in the producer's first publish.
-//
-// Returns 0 on success, -1 on hard error (write-permission denied,
-// /dev/shm unwritable, etc.). The error is non-fatal for the reader —
-// rrb_reader_open continues either way and lazy-attaches in recv().
-static int reader_touch_placeholder(const char* path)
-{
-    int fd = open(path, O_CREAT | O_RDWR, 0660);
-    if (fd < 0) return -1;
-    close(fd);
-    return 0;
-}
-
-rrb_reader_t* rrb_reader_open(const char* channel) {
-    if (!channel) return NULL;
+rrb_reader_t* rrb_reader_open(const char* channel,
+                              uint32_t slot_count,
+                              uint32_t max_payload,
+                              uint32_t flags) {
+    if (!channel || slot_count == 0 || max_payload == 0) return NULL;
     rrb_reader_t* r = calloc(1, sizeof(*r));
     if (!r) return NULL;
     if (rrb_channel_to_path(channel, r->path, sizeof(r->path)) != 0) {
-        free(r); return NULL;
+        free(r);
+        return NULL;
     }
     strncpy(r->channel, channel, sizeof(r->channel) - 1);
-    r->fd = -1;
-    // Create the file as a 0-byte placeholder if it doesn't exist yet
-    // so subscribers materialise the channel even before any producer
-    // appears. Safe against later producer-side ftruncate: we don't
-    // mmap a 0-byte file (reader_attach bails on size < header), so
-    // there's nothing to SIGBUS.
-    (void)reader_touch_placeholder(r->path);
-    // Try to attach now; if the producer hasn't initialised the header
-    // yet (file is 0 bytes or stale magic), leave r->base NULL and let
-    // recv() retry. The caller doesn't need to care.
-    (void)reader_attach(r);
+    r->want_slots   = slot_count;
+    r->want_payload = max_payload;
+    r->flags        = flags;
+    r->fd           = -1;
+    if (reader_attach(r, /*fresh=*/1) != 0) {
+        free(r);
+        return NULL;
+    }
     return r;
+}
+
+int rrb_reader_revalidate(rrb_reader_t* r) {
+    if (!r) return -1;
+    if (!r->base) return reader_attach(r, /*fresh=*/0) == 0 ? 0 : -1;
+    r->last_check_ns = now_ns();
+    struct stat st;
+    if (fstat(r->fd, &st) != 0 || st.st_nlink > 0) return 0;
+    // The file was deleted. A new ring is a new epoch: replay what it holds.
+    reader_detach(r);
+    return reader_attach(r, /*fresh=*/0) == 0 ? 0 : -1;
 }
 
 int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len) {
@@ -752,65 +515,32 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
     *out_len = 0;
 
     for (int attempt = 0; attempt < 8; ++attempt) {
-        // Defensive guard: r->hdr can be NULL on entry (lazy reader before
-        // any producer materialised) or after a previous loop iteration's
-        // reader_reopen_if_unlinked() detached and failed to re-attach
-        // (producer was unlinked AND not yet recreated, or recreated with
-        // a bad header that fails the magic check). Without this guard,
-        // every r->hdr dereference below SEGVs — verified on production
-        // Pi 2026-06-02 (SIGSEGV at rrb_reader_recv +0x884bc on AArch64
-        // loading r->hdr->slot_count via NULL ptr). Reproducer:
-        // tests/test_reader_recv_robust.cpp.
         if (!r->base || !r->hdr) {
-            if (reader_attach(r) != 0) return 1;
+            // A previous re-attach failed (the ring file could not be opened).
+            if (reader_attach(r, /*fresh=*/0) != 0) return 1;
         }
 
-        // Producer-side grow detection: if the writer's growWriter() path
-        // tore down and re-created this ring with a bigger max_payload, the
-        // header's slot_size changed under our mmap but our cached stride
-        // didn't, and reading slots with the stale stride yields garbage —
-        // observed as "UI froze on a single frame" after the first oversized
-        // JPEG triggered a "resizing ring" log on the producer. The file
-        // isn't unlinked by the resize path, so reader_reopen_if_unlinked()
-        // can't catch this. Compare live slot_size to our cached stride and
-        // re-attach on mismatch; the re-attach maps the new file size and
-        // refreshes stride/slots in one go.
-        if (r->hdr && (r->hdr->slot_size != r->stride ||
-                       r->hdr->slot_count != r->slot_count ||
-                       r->hdr->max_payload != r->max_payload)) {
+        // The ring was re-initialised under us with another geometry: the cached
+        // stride would index the new slots wrongly. Re-attach and replay.
+        if (r->hdr->slot_size != r->stride ||
+            r->hdr->slot_count != r->slot_count ||
+            r->hdr->max_payload != r->max_payload) {
             reader_detach(r);
-            if (reader_attach(r) != 0) return 1;
-            // Producer rebuilt the ring → seq counter restarted at 0. Old
-            // last_seen is meaningless against the new epoch; replay from
-            // the start so we don't sit forever waiting for a seq number
-            // the new producer will never reach.
-            r->last_seen = 0;
+            if (reader_attach(r, /*fresh=*/0) != 0) return 1;
         }
 
         uint64_t producer = atomic_load_explicit(&r->hdr->producer_seq,
                                                  memory_order_acquire);
-        if (producer == r->last_seen) {
-            // No new data.  The underlying file may have been unlinked
-            // and replaced since we last attached — if so, re-attach so
-            // the next poll sees the fresh inode.
-            reader_reopen_if_unlinked(r);
-            if (!r->base || !r->hdr) return 1;  // detached + reattach failed → bail
-            producer = atomic_load_explicit(&r->hdr->producer_seq,
-                                            memory_order_acquire);
-            if (producer == r->last_seen) return 1;
-        }
+        if (producer == r->last_seen) return 1;
 
-        // Producer restarted: producer_seq moved backwards because
-        // rrb_writer_create re-initialised the ring in place. Reset to
-        // the START of the new epoch so we replay every still-intact frame
-        // from the restarted producer, not just the current tail.
+        // The ring was re-initialised in place (same geometry): the ticket counter
+        // restarted. Replay the new epoch from its start.
         if (producer < r->last_seen) {
             r->last_seen = 0;
             if (producer == 0) return 1;
         }
 
-        // If we're behind by more than (slot_count - 1), the producer has
-        // lapped us. Jump to the oldest still-intact slot in the ring.
+        // Lapped: jump to the oldest slot that is still intact.
         uint64_t next;
         if (producer - r->last_seen > (uint64_t)r->slot_count - 1u) {
             next = producer - ((uint64_t)r->slot_count - 1u);
@@ -818,55 +548,41 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
             next = r->last_seen + 1;
         }
 
-        uint32_t slot_idx = (uint32_t)((next - 1) % r->slot_count);
-        slot_hdr_t* s = (slot_hdr_t*)(r->slots + (size_t)slot_idx * r->stride);
+        slot_hdr_t* s = (slot_hdr_t*)(r->slots +
+            (size_t)((next - 1) % r->slot_count) * r->stride);
 
-        // SeqLock read: snapshot seq, copy payload, re-check seq. If it
-        // changed, the slot was overwritten by the producer mid-copy and we
-        // must move on — same data loss policy as overrun above.
+        // Seqlock read: snapshot seq, copy the payload, check seq again. A changed
+        // seq means a writer overwrote the slot during the copy.
         for (int retry = 0; retry < 3; ++retry) {
             uint64_t seq_before = atomic_load_explicit(&s->seq, memory_order_acquire);
-            if ((seq_before == 0 || seq_before < next) &&
-                (r->hdr->flags & RRB_FLAG_MULTI_PRODUCER)) {
-                // Multi-producer ring: the slot was claimed by a writer that
-                // has not finished filling it yet (copying a few bytes). Give
-                // it a moment, then report "no data" WITHOUT moving past it;
-                // the next poll picks it up. Only if the same slot stays
-                // unwritten for RRB_MP_STALL_NS (writer died between claim and
-                // publish) do we skip it so the ring can't wedge.
+            if (seq_before == 0 || seq_before < next) {
+                // The ticket is claimed but the slot is not filled yet (a writer is
+                // copying a few bytes). Give it a moment, then report "no frame"
+                // WITHOUT moving past it; the next poll picks it up. Only if the same
+                // slot stays unwritten for RRB_MP_STALL_NS (the writer died between
+                // claim and publish) do we skip it, so the ring cannot wedge.
                 for (int spin = 0; spin < 200 && (seq_before == 0 || seq_before < next); ++spin) {
                     sched_yield();
                     seq_before = atomic_load_explicit(&s->seq, memory_order_acquire);
                 }
                 if (seq_before == 0 || seq_before < next) {
-                    struct timespec ts;
-                    clock_gettime(CLOCK_MONOTONIC, &ts);
-                    uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+                    const uint64_t now = now_ns();
                     if (r->stall_seq != next) {
                         r->stall_seq = next;
-                        r->stall_since_ns = now_ns;
+                        r->stall_since_ns = now;
                         return 1;
                     }
-                    if (now_ns - r->stall_since_ns < RRB_MP_STALL_NS) return 1;
-                    r->last_seen = next;  // writer is gone: skip the hole
+                    if (now - r->stall_since_ns < RRB_MP_STALL_NS) return 1;
+                    r->last_seen = next;  // the writer is gone: skip the hole
                     return 1;
                 }
             }
-            if (seq_before == 0 || seq_before < next) {
-                // Producer cleared the slot to write something new; treat as
-                // overrun, bump last_seen so we move past this seq.
-                r->last_seen = next;
-                return 1;
-            }
             if (seq_before > next) {
-                // Producer already wrote a NEWER seq into this slot since we
-                // looked. Advance to that seq and retry from the top without
-                // recursion; after a producer restart this may briefly point at
-                // stale high seq numbers from the prior epoch.
+                // A newer ticket already overwrote the slot. Continue from there.
                 r->last_seen = seq_before - 1;
                 break;
             }
-            // seq_before == next — slot looks valid. Copy payload.
+            // seq_before == next: the slot holds the frame. Copy the payload.
             uint32_t len = s->len;
             if (len > r->max_payload) len = r->max_payload;
             if (len > buf_size) {
@@ -883,7 +599,6 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
             }
             memcpy(buf, s->data, len);
 
-            // Verify seq didn't change during the copy.
             uint64_t seq_after = atomic_load_explicit(&s->seq, memory_order_acquire);
             if (seq_after == next) {
                 *out_len = len;
@@ -891,12 +606,11 @@ int rrb_reader_recv(rrb_reader_t* r, void* buf, size_t buf_size, size_t* out_len
                 r->too_big_seq = 0;
                 return 0;
             }
-            // Slot was overwritten during our copy — retry with the newer seq.
+            // Overwritten during the copy: retry with what is there now.
         }
     }
-    // The producer kept moving while we were inspecting the ring, or we
-    // saw an inconsistent restart boundary. Let the next poll retry from
-    // the updated last_seen state instead of recursing indefinitely.
+    // The writers kept moving while we were inspecting the ring. The next poll
+    // retries from the updated last_seen.
     return 1;
 }
 
@@ -904,40 +618,29 @@ int rrb_reader_recv_wait(rrb_reader_t* r, void* buf, size_t buf_size,
                          size_t* out_len, int timeout_us) {
     if (!r || !buf || !out_len) return -1;
 
-    // Fast path: try once before parking. Covers the common case where
-    // the producer published while we were processing the last frame —
-    // no syscall needed.
+    // Fast path: no syscall when a frame is already there.
     int rc = rrb_reader_recv(r, buf, buf_size, out_len);
-    if (rc != 1) return rc;          // 0 = got data, -1 = error
-    if (timeout_us <= 0) return 1;   // caller wanted non-blocking
-
-    // Park on the producer's wake_seq. The futex protocol guarantees
-    // no lost wakeups: if the producer bumps wake_seq between our
-    // snapshot and the syscall, the kernel returns EAGAIN immediately
-    // and we re-poll.
-    //
-    // We only need r->base mapped to read wake_seq. If the producer
-    // hasn't materialised the file yet (lazy attach failed inside
-    // rrb_reader_recv above), wait a few ms and try again.
+    if (rc != 1) return rc;          // 0 = got a frame, -1 = error
+    if (timeout_us <= 0) return 1;   // the caller wanted a non-blocking call
     if (!r->base) {
         struct timespec lazy = {0, 1000000L};  // 1 ms
         nanosleep(&lazy, NULL);
         return rrb_reader_recv(r, buf, buf_size, out_len);
     }
 
-    // Bump waiter_count BEFORE snapshotting wake_seq so the writer's
-    // skip check (load waiter_count, then publish) can't miss us: if
-    // the writer's load happens-before our increment, our snapshot of
-    // wake_seq will already include the writer's publish and the
-    // futex_wait returns EAGAIN immediately.
-    atomic_fetch_add_explicit(&r->hdr->waiter_count, 1u,
-                              memory_order_release);
-    uint32_t expected = atomic_load_explicit(&r->hdr->wake_seq,
-                                             memory_order_acquire);
+    // Announce the wait BEFORE the snapshot of wake_seq, so a writer that checks
+    // waiter_count either sees us (and wakes us) or has published before our
+    // snapshot (and the futex_wait returns EAGAIN at once).
+    atomic_fetch_add_explicit(&r->hdr->waiter_count, 1u, memory_order_release);
+    uint32_t expected = atomic_load_explicit(&r->hdr->wake_seq, memory_order_acquire);
     (void)futex_wait_until(&r->hdr->wake_seq, expected, timeout_us);
     waiter_leave(&r->hdr->waiter_count);
-    // EAGAIN, EINTR, ETIMEDOUT all fall through — re-poll either way.
-    return rrb_reader_recv(r, buf, buf_size, out_len);
+    // EAGAIN, EINTR and ETIMEDOUT all fall through: poll again either way.
+    rc = rrb_reader_recv(r, buf, buf_size, out_len);
+    if (rc == 1 && now_ns() - r->last_check_ns >= REVALIDATE_INTERVAL_NS) {
+        (void)rrb_reader_revalidate(r);
+    }
+    return rc;
 }
 
 int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
@@ -947,79 +650,65 @@ int rrb_reader_recv_wait_many(rrb_reader_t* const* readers, size_t n,
                                                   cb, user, timeout_us);
 }
 
+// Hands every frame the reader has to `cb`. The receive buffer starts on the stack
+// and grows (heap) to exactly what a frame needs. Returns 0, 1 when `cb` asked to
+// stop, -1 on allocation failure.
+static int drain_reader(rrb_reader_t* r, size_t index, rrb_multi_handler cb, void* user,
+                        uint8_t* scratch, size_t scratch_sz,
+                        uint8_t** big, size_t* big_sz, int* delivered) {
+    for (;;) {
+        size_t out_len = 0;
+        uint8_t* buf = *big ? *big : scratch;
+        size_t buf_sz = *big ? *big_sz : scratch_sz;
+        int rc = rrb_reader_recv(r, buf, buf_sz, &out_len);
+        if (rc == RRB_RECV_TOO_BIG) {
+            // Grow to exactly what this frame needs, not to the ring's max_payload:
+            // a ring may be sized for frames of many MiB while its frames are a few KiB.
+            uint8_t* grown = (uint8_t*)realloc(*big, out_len);
+            if (!grown) return -1;
+            *big = grown;
+            *big_sz = out_len;
+            continue;
+        }
+        if (rc != 0) return 0;
+        if (cb(index, buf, out_len, user) != 0) return 1;
+        ++*delivered;
+    }
+}
+
 int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t n,
                                            uint32_t* control,
                                            uint32_t control_expected,
                                            rrb_multi_handler cb, void* user,
                                            int timeout_us) {
-    // 128 is the kernel's futex_waitv cap. We need 1 slot for the optional
-    // control entry, so channels can use up to 127 when control is set.
+    // 128 is the kernel's futex_waitv cap; the control word takes one entry.
     if (!readers || !cb || n == 0) return -1;
     const size_t max_channels = control ? 127 : 128;
     if (n > max_channels) return -1;
 
-    // Tiny scratch buffer used by the drain loop — sized to RRB_DEFAULT
-    // for the common case and grown to the largest ring's max_payload
-    // we see attached. 8 KiB is plenty for non-camera channels.
-    uint8_t scratch[8192];
-    size_t scratch_sz = sizeof(scratch);
+    uint8_t scratch[2048];
     uint8_t* big = NULL;
     size_t big_sz = 0;
-
-    // Pass 1: fast non-blocking drain across every reader. Most spins
-    // catch frames here without ever calling the syscall.
     int delivered = 0;
+    int rc;
+
+    // Pass 1: drain every reader without a syscall.
     for (size_t i = 0; i < n; ++i) {
         rrb_reader_t* r = readers[i];
         if (!r) continue;
-        // Lazy reattach: a reader opened before its producer materialised
-        // the SHM file stays with r->base == NULL until something calls
-        // reader_attach() on it again. The single-reader rrb_reader_recv
-        // path retries on every call; this multi-reader path used to
-        // skip unattached readers entirely, so a subscriber that started
-        // before its publisher never caught up and only a process
-        // restart would heal it. Cost of a retry when the file is still
-        // missing is one shm_open() that fails with ENOENT — negligible
-        // at the 20 Hz spin rate of the bridge poll loop.
-        if (!r->base) {
-            if (reader_attach(r) != 0) continue;
-        }
-        for (;;) {
-            size_t out_len = 0;
-            uint8_t* buf = big ? big : scratch;
-            size_t buf_sz = big ? big_sz : scratch_sz;
-            int rc = rrb_reader_recv(r, buf, buf_sz, &out_len);
-            if (rc == RRB_RECV_TOO_BIG) {
-                // Grow to exactly what this frame needs, not to the ring's
-                // max_payload: a ring may be sized for frames of many MiB while
-                // its frames are a few KiB.
-                uint8_t* grown = (uint8_t*)realloc(big, out_len);
-                if (!grown) { delivered = -1; goto done; }
-                big = grown;
-                big_sz = out_len;
-                continue;
-            }
-            if (rc != 0) break;
-            if (cb(i, buf, out_len, user) != 0) { goto done; }
-            ++delivered;
-        }
+        rc = drain_reader(r, i, cb, user, scratch, sizeof(scratch), &big, &big_sz, &delivered);
+        if (rc < 0) { delivered = -1; goto done; }
+        if (rc > 0) goto done;
     }
     if (delivered > 0 || timeout_us == 0) goto done;
 
-    // Pass 2: build the waitv list and park. Only readers that are
-    // attached and whose wake_seq is observable get added; un-attached
-    // ones (file doesn't exist yet) skip the wait and are caught by
-    // the next caller's pass 1. Optional control word goes in last so
-    // the caller can identify a "wake came from control, not a
-    // channel" event by re-reading *control and comparing to
-    // control_expected.
+    // Pass 2: park on the wake_seq of every attached reader, plus the control word.
     struct rrb_futex_waitv waiters[128];
     size_t nw = 0;
     for (size_t i = 0; i < n; ++i) {
         rrb_reader_t* r = readers[i];
         if (!r || !r->base) continue;
-        waiters[nw].val = atomic_load_explicit(&r->hdr->wake_seq,
-                                               memory_order_acquire);
+        waiters[nw].val = atomic_load_explicit(&r->hdr->wake_seq, memory_order_acquire);
         waiters[nw].uaddr = (uint64_t)(uintptr_t)&r->hdr->wake_seq;
         waiters[nw].flags = FUTEX2_SIZE_U32;
         waiters[nw].__reserved = 0;
@@ -1033,37 +722,30 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
         ++nw;
     }
     if (nw == 0) {
-        // No attached readers AND no control entry — fall back to a
-        // plain sleep so the caller doesn't burn a CPU spinning on
-        // the empty list.
+        // Nothing to park on: sleep so the caller does not spin on an empty list.
         struct timespec sleep_ts = {
             timeout_us / 1000000,
             (long)(timeout_us % 1000000) * 1000L,
         };
         nanosleep(&sleep_ts, NULL);
-        goto done;
+        goto after_wait;
     }
     if (atomic_load_explicit(&g_waitv_unsupported, memory_order_relaxed)) {
-        // The kernel has no futex_waitv (before Linux 5.16). Poll every
-        // millisecond instead of parking: wakes are late by up to 1 ms but the
-        // caller keeps receiving. A change of the control word ends the wait early.
+        // No futex_waitv (before Linux 5.16): poll every millisecond instead of
+        // parking. Wakes are late by up to 1 ms. A change of the control word ends
+        // the wait early.
         const int slice_us = timeout_us < 1000 ? timeout_us : 1000;
         if (!(control && *(volatile uint32_t*)control != control_expected)) {
             struct timespec poll_ts = {0, (long)slice_us * 1000L};
             nanosleep(&poll_ts, NULL);
         }
     } else {
-        // Bump waiter_count on every reader we're about to park on so
-        // writers know to FUTEX_WAKE us. Ordering matters: increment
-        // first, then re-snapshot wake_seq inside futex_waitv (already
-        // done above with memory_order_acquire). If a writer races us
-        // and publishes between our wake_seq snapshot and futex_waitv,
-        // the kernel returns EAGAIN — we re-drain in pass 3.
+        // Announce the wait on every ring we park on, then take the snapshot (done
+        // above): a writer that publishes in between makes futex_waitv return EAGAIN.
         for (size_t i = 0; i < n; ++i) {
             rrb_reader_t* r = readers[i];
             if (!r || !r->base) continue;
-            atomic_fetch_add_explicit(&r->hdr->waiter_count, 1u,
-                                      memory_order_release);
+            atomic_fetch_add_explicit(&r->hdr->waiter_count, 1u, memory_order_release);
         }
         if (futex_waitv_until(waiters, nw, timeout_us) < 0 && errno == ENOSYS) {
             atomic_store_explicit(&g_waitv_unsupported, 1, memory_order_relaxed);
@@ -1075,35 +757,24 @@ int rrb_reader_recv_wait_many_with_control(rrb_reader_t* const* readers, size_t 
         }
     }
 
-    // Pass 3: post-wake drain. Whatever woke us probably has data; the
-    // other channels' subsequent publishes will catch the next call.
-    // Also retry the lazy attach so a reader whose producer started
-    // during the futex_waitv joins the drain immediately instead of
-    // waiting one more spin.
+after_wait:
+    // Pass 3: drain what woke us.
     for (size_t i = 0; i < n; ++i) {
         rrb_reader_t* r = readers[i];
         if (!r) continue;
-        if (!r->base) {
-            if (reader_attach(r) != 0) continue;
-        }
-        for (;;) {
-            size_t out_len = 0;
-            uint8_t* buf = big ? big : scratch;
-            size_t buf_sz = big ? big_sz : scratch_sz;
-            int rc = rrb_reader_recv(r, buf, buf_sz, &out_len);
-            if (rc == RRB_RECV_TOO_BIG) {
-                // Grow to exactly what this frame needs, not to the ring's
-                // max_payload: a ring may be sized for frames of many MiB while
-                // its frames are a few KiB.
-                uint8_t* grown = (uint8_t*)realloc(big, out_len);
-                if (!grown) { delivered = -1; goto done; }
-                big = grown;
-                big_sz = out_len;
-                continue;
+        rc = drain_reader(r, i, cb, user, scratch, sizeof(scratch), &big, &big_sz, &delivered);
+        if (rc < 0) { delivered = -1; goto done; }
+        if (rc > 0) goto done;
+    }
+    if (delivered == 0) {
+        // Idle: about once a second check that the ring files are still the ones on
+        // disk (one fstat per reader, not on every poll).
+        const uint64_t now = now_ns();
+        for (size_t i = 0; i < n; ++i) {
+            rrb_reader_t* r = readers[i];
+            if (r && (!r->base || now - r->last_check_ns >= REVALIDATE_INTERVAL_NS)) {
+                (void)rrb_reader_revalidate(r);
             }
-            if (rc != 0) break;
-            if (cb(i, buf, out_len, user) != 0) { goto done; }
-            ++delivered;
         }
     }
 done:

@@ -1,3 +1,4 @@
+#include "raccoon/ChannelTable.h"
 #include "raccoon/Channels.h"
 #include "raccoon/Options.h"
 #include "raccoon/Transport.h"
@@ -34,6 +35,13 @@ namespace
         }
     }
 
+    void resetRing(const std::string& channel)
+    {
+        char path[512];
+        require(rrb_channel_to_path(channel.c_str(), path, sizeof(path)) == 0, "path of " + channel);
+        (void)unlink(path);
+    }
+
     void spinTransport(raccoon::Transport& transport, int maxIterations = 64)
     {
         for (int i = 0; i < maxIterations; ++i)
@@ -52,7 +60,7 @@ namespace
         auto transport = raccoon::Transport::create("memq://");
 
         int callbacks = 0;
-        require(transport.subscribe<raccoon::scalar_i32_t>("unit/typed",
+        require(transport.subscribe<raccoon::scalar_i32_t>("hardware/motor/0/cmd/power",
             [&](const raccoon::scalar_i32_t& msg)
             {
                 ++callbacks;
@@ -65,7 +73,7 @@ namespace
             std::chrono::system_clock::now().time_since_epoch() - std::chrono::milliseconds(5)).count();
         msg.value = 123;
 
-        require(transport.publish("unit/typed", msg), "typed publish failed");
+        require(transport.publish("hardware/motor/0/cmd/power", msg), "typed publish failed");
         spinTransport(transport);
 
         require(callbacks == 1, "typed subscription should fire exactly once");
@@ -78,7 +86,7 @@ namespace
         require(stats.latency.maxUs >= stats.latency.minUs, "latency max should be at least latency min");
         require(stats.latency.avgUs >= stats.latency.minUs, "latency avg should be at least latency min");
         require(!stats.channels.empty(), "per-channel stats should contain the subscribed channel");
-        require(stats.channels.front().name == "unit/typed",
+        require(stats.channels.front().name == "hardware/motor/0/cmd/power",
                 "per-channel stats should report the typed channel name");
         require(stats.channels.front().deliveries == 1,
                 "per-channel stats should report exactly one delivery");
@@ -103,9 +111,7 @@ namespace
     void testParkedDeliveryOfSmallPayloadIsCounted()
     {
         constexpr int kFrames = 30;
-        // The ring of a channel outlives the process (shared memory): a name of its own for every
-        // run keeps frames of an earlier run from being delivered here.
-        const std::string channel = "unit/parked-" + std::to_string(::getpid());
+        const std::string channel = "messages/warn";
         auto transport = raccoon::Transport::create();
         std::atomic<int> received{0};
         require(transport.subscribeRaw(channel,
@@ -155,7 +161,7 @@ namespace
 
         std::atomic<int> heartbeatsSent{0};
         std::atomic<int> heartbeatsReceived{0};
-        require(transport.subscribeRaw("unit/hb",
+        require(transport.subscribeRaw("messages/warn",
             [&](const void*, int)
             {
                 heartbeatsReceived.fetch_add(1);
@@ -168,7 +174,7 @@ namespace
             const uint8_t payload[1] = {0xBE};
             while (!stop.load())
             {
-                if (transport.publishRaw("unit/hb", payload, sizeof(payload)))
+                if (transport.publishRaw("messages/warn", payload, sizeof(payload)))
                 {
                     heartbeatsSent.fetch_add(1);
                 }
@@ -185,7 +191,7 @@ namespace
                 const uint8_t payload[2] = {static_cast<uint8_t>(w), 0xFF};
                 while (!stop.load())
                 {
-                    transport.publishRaw("unit/flood", payload, sizeof(payload));
+                    transport.publishRaw("messages/error", payload, sizeof(payload));
                 }
             });
         }
@@ -214,20 +220,20 @@ namespace
         auto transport = raccoon::Transport::create("memq://");
 
         std::atomic<int> echoes{0};
-        require(transport.subscribeRaw("unit/recurse",
+        require(transport.subscribeRaw("camera/cmd/request",
             [&](const void*, int)
             {
                 const uint8_t ack[1] = {0xAC};
-                transport.publishRaw("unit/recurse-ack", ack, sizeof(ack));
+                transport.publishRaw("camera/response", ack, sizeof(ack));
                 echoes.fetch_add(1);
             }), "subscribe recurse failed");
 
         std::atomic<int> acks{0};
-        require(transport.subscribeRaw("unit/recurse-ack",
+        require(transport.subscribeRaw("camera/response",
             [&](const void*, int) { acks.fetch_add(1); }), "subscribe ack failed");
 
         const uint8_t payload[1] = {0x42};
-        require(transport.publishRaw("unit/recurse", payload, sizeof(payload)),
+        require(transport.publishRaw("camera/cmd/request", payload, sizeof(payload)),
                 "publish recurse failed");
 
         spinTransport(transport, 32);
@@ -237,23 +243,11 @@ namespace
                 "callback's nested publish should reach its own subscriber");
     }
 
-    void testOversizedPublishGrowsRingAndRepublishes()
+    void testFrameSizesAndLimits()
     {
-        // Regression test for the grow-and-republish path: a payload larger
-        // than the ring's max_payload must transparently re-create the ring
-        // with a bigger slot size AND republish the frame — and an already-
-        // attached subscriber must keep receiving (the reader detects the
-        // slot_size change and re-attaches; this detection was lost once in
-        // a refactor and froze the botui on the last pre-grow frame).
-        const std::string channel = "unit/grow";
-
-        // Wipe any stale ring from a previous run so the first publish
-        // deterministically sizes the ring at RRB_DEFAULT_MAX_PAYLOAD.
-        char shmPath[512];
-        require(rrb_channel_to_path(channel.c_str(), shmPath, sizeof(shmPath)) == 0,
-                "failed to derive shm path for " + channel);
-        (void)unlink(shmPath);
-
+        // The slot size of a channel is fixed by the channel table. Frames up to the limit
+        // pass, bigger ones are rejected and the channel keeps working.
+        const std::string channel = "messages/error";
         auto transport = raccoon::Transport::create("memq://");
 
         std::mutex framesMutex;
@@ -264,42 +258,43 @@ namespace
                 std::lock_guard<std::mutex> lk(framesMutex);
                 const auto* bytes = static_cast<const uint8_t*>(data);
                 frames.emplace_back(bytes, bytes + len);
-            }), "subscribe grow failed");
+            }), "subscribe failed");
 
-        // First publish sizes the ring at the 2 KiB default.
         std::vector<uint8_t> small(64, 0xAB);
-        require(transport.publishRaw(channel, small.data(), (int)small.size()),
-                "small publish failed");
-        spinTransport(transport);
+        require(transport.publishRaw(channel, small.data(), (int)small.size()), "small publish failed");
 
-        // Oversized frame (> 2 KiB) forces grow-and-republish.
-        std::vector<uint8_t> big(8000);
-        for (size_t i = 0; i < big.size(); ++i)
-        {
-            big[i] = static_cast<uint8_t>(i * 31u);
-        }
-        require(transport.publishRaw(channel, big.data(), (int)big.size()),
-                "oversized publish should grow the ring and succeed");
-        spinTransport(transport);
+        std::vector<uint8_t> big(200000);
+        for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<uint8_t>(i * 31u);
+        require(transport.publishRaw(channel, big.data(), (int)big.size()), "big publish failed");
 
-        // The channel must keep working after the resize.
+        const auto* info = raccoon::channels::find_channel(channel);
+        require(info != nullptr, "channel is in the table");
+        std::vector<uint8_t> tooBig(info->payload + 1, 0x11);
+        require(!transport.publishRaw(channel, tooBig.data(), (int)tooBig.size()),
+                "a frame above the limit of the table must be rejected");
+
         std::vector<uint8_t> after(100, 0xCD);
         require(transport.publishRaw(channel, after.data(), (int)after.size()),
-                "post-grow publish failed");
+                "publish after a rejected frame failed");
         spinTransport(transport);
 
         std::lock_guard<std::mutex> lk(framesMutex);
-        bool sawBig = false;
-        bool sawAfter = false;
-        for (const auto& f : frames)
-        {
-            if (f == big) sawBig = true;
-            if (f == after) sawAfter = true;
-        }
-        require(sawBig,
-                "subscriber should receive the oversized frame intact after the ring grow");
-        require(sawAfter,
-                "subscriber should keep receiving frames published after the ring grow");
+        require(frames.size() == 3, "expected three frames, got " + std::to_string(frames.size()));
+        require(frames[0] == small && frames[1] == big && frames[2] == after, "frames corrupt or reordered");
+    }
+
+    void testStrictChannelTable()
+    {
+        auto transport = raccoon::Transport::create("memq://");
+        const uint8_t payload[12] = {};
+        require(!transport.publishRaw("hardware/motor/9/cmd/power", payload, sizeof(payload)),
+                "a channel that is not in the table must not be published");
+        require(!transport.subscribeRaw("unit/anything", [](const void*, int) {}),
+                "a channel that is not in the table must not be subscribed");
+        // A fixed-size type has exactly one size.
+        require(!transport.publishRaw("hardware/motor/0/cmd/power", payload, 11), "11 bytes on a 12-byte channel");
+        require(!transport.publishRaw("hardware/motor/0/cmd/power", payload, 13), "13 bytes on a 12-byte channel");
+        require(transport.publishRaw("hardware/motor/0/cmd/power", payload, 12), "12 bytes on a 12-byte channel");
     }
 
     void testSlowSubscriberCallbackDoesNotBlockConcurrentSubscribe()
@@ -310,7 +305,7 @@ namespace
         std::atomic<bool> releaseCallback{false};
         std::atomic<bool> secondSubscribeInstalled{false};
 
-        require(transport.subscribeRaw("unit/slow",
+        require(transport.subscribeRaw("messages/warn",
             [&](const void*, int)
             {
                 callbackEntered.store(true);
@@ -323,7 +318,7 @@ namespace
         std::thread spinner([&] { transport.spin(); });
 
         const uint8_t payload[1] = {0x42};
-        require(transport.publishRaw("unit/slow", payload, sizeof(payload)),
+        require(transport.publishRaw("messages/warn", payload, sizeof(payload)),
                 "publish slow failed");
 
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
@@ -335,7 +330,7 @@ namespace
 
         auto subscribeFuture = std::async(std::launch::async, [&]
         {
-            bool ok = transport.subscribeRaw("unit/late",
+            bool ok = transport.subscribeRaw("messages/error",
                 [&](const void*, int) {}, raccoon::SubscribeOptions{});
             secondSubscribeInstalled.store(ok);
             return ok;
@@ -358,8 +353,10 @@ namespace
         // A value channel with deduplicate=true must drop publishes whose
         // value is unchanged, even though each carries a fresh timestamp
         // (the dedup comparison excludes the leading 8-byte stamp).
+        // A retained channel hands its latest frame to a new subscriber: start from an empty ring.
+        resetRing("hardware/motor/1/state/power");
         auto transport = raccoon::Transport::create("memq://");
-        const std::string channel = "raccoon/test/dedup_value";
+        const std::string channel = "hardware/motor/1/state/power";
         require(!raccoon::Channels::isCommandChannel(channel),
                 "value channel must not classify as a command channel");
 
@@ -407,7 +404,7 @@ namespace
         // deduplicate=true and a byte-identical payload — re-issuing the
         // same command is meaningful and must reach the subscriber.
         auto transport = raccoon::Transport::create("memq://");
-        const std::string channel = "raccoon/test/thing_cmd";
+        const std::string channel = "hardware/motor/2/cmd/power";
         require(raccoon::Channels::isCommandChannel(channel),
                 "channel ending in _cmd must classify as a command channel");
 
@@ -441,7 +438,8 @@ int main()
         {"parked delivery of a small payload is counted", testParkedDeliveryOfSmallPayloadIsCounted},
         {"heartbeat stays on time while writers flood", testHeartbeatStaysOnTimeWhileWritersFlood},
         {"subscriber callback can publish back (recursive)", testSubscriberCallbackCanPublishBack},
-        {"oversized publish grows ring and republishes", testOversizedPublishGrowsRingAndRepublishes},
+        {"frame sizes follow the channel table", testFrameSizesAndLimits},
+        {"only channels of the table exist", testStrictChannelTable},
         {"slow subscriber callback does not block concurrent subscribe", testSlowSubscriberCallbackDoesNotBlockConcurrentSubscribe},
     };
 

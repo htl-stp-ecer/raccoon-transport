@@ -23,6 +23,7 @@
 
 #include "raccoon/Transport.h"
 
+#include "raccoon/ChannelTable.h"
 #include "raccoon/Channels.h"
 #include "raccoon/Contract.h"
 #include "raccoon/Dedup.h"
@@ -93,10 +94,7 @@ namespace raccoon
         struct PubEntry
         {
             rrb_writer_t* writer = nullptr;
-            // Track the ring's current max_payload so publishRaw can
-            // detect outgrowth and re-create the writer with a larger
-            // ring instead of dropping the frame.
-            uint32_t max_payload = 0;
+            const channels::ChannelInfo* info = nullptr;
             // Last value bytes published with deduplicate=true on this
             // channel — see raccoon::dedup::shouldDrop.
             dedup::LastPayload dedupState;
@@ -106,9 +104,8 @@ namespace raccoon
             std::string channel;
             rrb_reader_t* reader = nullptr;
             std::vector<Transport::RawHandler> handlers;
-            // Per-channel scratch buffer for the receive copy. Sized at
-            // RRB_DEFAULT_MAX_PAYLOAD; if any channel ends up needing
-            // larger we grow it lazily.
+            // Per-channel scratch buffer for the receive copy; it grows to the
+            // size of the biggest frame received.
             std::vector<uint8_t> scratch;
         };
 
@@ -290,7 +287,7 @@ namespace raccoon
             if (reliableStarted) return;
             reliableStarted = true;
             if (!ackReader)
-                ackReader = rrb_reader_open(raccoon::Channels::Protocol::ACK);
+                ackReader = openReader(channels::protocol::ACK);
             reliableThreadRun.store(true);
             reliableThread = std::thread([this] { reliableLoop(); });
         }
@@ -388,7 +385,7 @@ namespace raccoon
                     out.push_back({true, p.channel, p.key, p.attempts});
                     continue;  // drop
                 }
-                rrb_writer_t* w = writerFor(p.channel, p.payload.size());
+                rrb_writer_t* w = writerFor(p.channel);
                 if (w) rrb_writer_publish(w, p.payload.data(), p.payload.size());
                 p.lastSent = now;
                 ++p.attempts;
@@ -410,7 +407,7 @@ namespace raccoon
                             int dataLen, const PublishOptions& options)
         {
             // The ACK channel itself must never be reliable (would recurse).
-            if (channel == raccoon::Channels::Protocol::ACK) return;
+            if (channel == channels::protocol::ACK) return;
             const int64_t key = readTimestampBE(data, dataLen);
             if (key == 0) return;  // no timestamp → cannot correlate an ACK
             ensureReliableStarted();
@@ -446,108 +443,51 @@ namespace raccoon
             if (enc < 0) return;
             std::lock_guard<std::recursive_mutex> lk(apiMutex);
             if (!running.load()) return;
-            rrb_writer_t* w = writerFor(raccoon::Channels::Protocol::ACK,
-                                        static_cast<size_t>(enc));
+            rrb_writer_t* w = writerFor(std::string(channels::protocol::ACK));
             if (w) rrb_writer_publish(w, buf.data(), static_cast<size_t>(enc));
         }
 
         bool isAlive() const noexcept { return running.load(); }
 
-        // Get-or-create a publisher writer for the channel. The first
-        // publish carries a `size_hint` so we can size the ring to the
-        // caller's actual payload size instead of paying the worst-case
-        // for every channel.
-        //
-        // Sizing policy: aim for ~128 KiB total ring memory per channel,
-        // with at least 4 slots of history and enough slot bytes to fit
-        // up to 2× the first-seen payload. Keeps small sensor channels
-        // cheap (~128 KiB) while letting camera-frame channels (256 KiB+
-        // payloads) round-trip without TruncationError.
-        //
-        // Returns nullptr if rrb_writer_create rejected the channel name
-        // (bad characters) or could not open /dev/shm — those are hard
-        // configuration errors, not transients.
-        // Compute (slot_count, max_payload) for a ring sized to fit
-        // `size_hint` bytes with 2× headroom. Shared by writerFor (first
-        // publish) and growWriter (later publish that outgrew the ring).
-        static void sizeRing(size_t size_hint, size_t& slots, size_t& want)
+        // The table entry of a channel, or nullptr (with a message) when the channel is
+        // not in the table: only channels of channels.yml exist.
+        static const channels::ChannelInfo* lookup(const std::string& channel)
         {
-            // Round size_hint UP to a multiple of 256 bytes, double it
-            // for headroom (next sensor frame may be slightly larger),
-            // and clamp at a sane floor.
-            want = (size_hint ? size_hint : 1) * 2;
-            if (want < RRB_DEFAULT_MAX_PAYLOAD) want = RRB_DEFAULT_MAX_PAYLOAD;
-            // round up to 256 bytes
-            want = ((want + 255) / 256) * 256;
-
-            // ~128 KiB ring budget; clamp slot count to [4, 64].
-            slots = (128u * 1024u) / want;
-            if (slots < 4) slots = 4;
-            if (slots > RRB_DEFAULT_SLOT_COUNT) slots = RRB_DEFAULT_SLOT_COUNT;
+            const channels::ChannelInfo* info = channels::find_channel(channel);
+            if (!info)
+            {
+                std::cerr << "raccoon::Transport: channel '" << channel
+                          << "' is not in the channel table\n";
+            }
+            return info;
         }
 
-        // The ACK channel is written by every subscriber process, so it needs the
-        // multi-producer ring; every other channel has exactly one writer.
-        static rrb_writer_t* createWriter(const std::string& channel,
-                                          size_t slots, size_t want)
+        static rrb_reader_t* openReader(std::string_view channel)
         {
-            if (channel == raccoon::Channels::Protocol::ACK)
-                return rrb_writer_create_multi(channel.c_str(), (uint32_t)slots,
-                                               (uint32_t)want);
-            return rrb_writer_create(channel.c_str(), (uint32_t)slots,
-                                     (uint32_t)want);
+            const channels::ChannelInfo* info = lookup(std::string(channel));
+            if (!info) return nullptr;
+            return rrb_reader_open(std::string(channel).c_str(), info->slots, info->payload,
+                                   info->retained ? RRB_FLAG_RETAINED : 0u);
         }
 
-        rrb_writer_t* writerFor(const std::string& channel, size_t size_hint)
+        // Get-or-create the writer of a channel. The geometry of the ring comes from
+        // the channel table. Returns nullptr if the channel is not in the table or
+        // /dev/shm is not writable.
+        rrb_writer_t* writerFor(const std::string& channel)
         {
             auto it = publishers.find(channel);
             if (it != publishers.end()) return it->second.writer;
 
-            size_t slots = 0, want = 0;
-            sizeRing(size_hint, slots, want);
-
-            rrb_writer_t* w = createWriter(channel, slots, want);
+            const channels::ChannelInfo* info = lookup(channel);
+            if (!info) return nullptr;
+            rrb_writer_t* w = rrb_writer_open(channel.c_str(), info->slots, info->payload);
             if (!w)
             {
-                std::cerr << "raccoon::Transport: rrb_writer_create('"
-                          << channel << "') failed (bad channel name or "
-                                        "/dev/shm not writable)\n";
+                std::cerr << "raccoon::Transport: cannot open the ring of '"
+                          << channel << "' (is " << RRB_DIR << " writable?)\n";
                 return nullptr;
             }
-            publishers.emplace(channel, PubEntry{w, (uint32_t)want, {}});
-            return w;
-        }
-
-        // Destroy and re-create the writer for `channel` with a ring big
-        // enough for `min_payload` bytes. The underlying SHM file is
-        // wiped + re-initialised in place by rrb_writer_create (header
-        // contract: mismatched layout triggers ftruncate + re-init).
-        // Active readers' mmaps stay valid but they will see a seq
-        // discontinuity — acceptable for "publisher's payload size grew
-        // mid-stream", which is the only caller. Returns nullptr if
-        // re-create failed (channel is then removed from `publishers`).
-        rrb_writer_t* growWriter(const std::string& channel, size_t min_payload)
-        {
-            auto it = publishers.find(channel);
-            if (it == publishers.end()) return nullptr;
-
-            size_t slots = 0, want = 0;
-            sizeRing(min_payload, slots, want);
-            if (want <= it->second.max_payload) return it->second.writer;
-
-            rrb_writer_destroy(it->second.writer);
-            rrb_writer_t* w = createWriter(channel, slots, want);
-            if (!w)
-            {
-                std::cerr << "raccoon::Transport: rrb_writer_create('"
-                    << channel << "') failed during grow (was "
-                    << it->second.max_payload << "B, wanted "
-                    << want << "B)\n";
-                publishers.erase(it);
-                return nullptr;
-            }
-            it->second.writer = w;
-            it->second.max_payload = (uint32_t)want;
+            publishers.emplace(channel, PubEntry{w, info, {}});
             return w;
         }
 
@@ -557,13 +497,8 @@ namespace raccoon
             {
                 if (s->channel == channel) return s.get();
             }
-            rrb_reader_t* r = rrb_reader_open(channel.c_str());
-            if (!r)
-            {
-                std::cerr << "raccoon::Transport: rrb_reader_open('"
-                          << channel << "') failed (bad channel name)\n";
-                return nullptr;
-            }
+            rrb_reader_t* r = openReader(channel);
+            if (!r) return nullptr;
             auto entry = std::make_unique<SubEntry>();
             entry->channel = channel;
             entry->reader = r;
@@ -661,8 +596,19 @@ namespace raccoon
     {
         if (!impl_ || !impl_->isAlive() || !data || dataLen <= 0) return false;
         std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
-        rrb_writer_t* w = impl_->writerFor(channel, (size_t)dataLen);
+        rrb_writer_t* w = impl_->writerFor(channel);
         if (!w) return false;
+        const channels::ChannelInfo* info = impl_->publishers.find(channel)->second.info;
+        // A fixed-size type has exactly one size; a variable one has an upper limit.
+        if (info->fixed_size ? static_cast<uint32_t>(dataLen) != info->payload
+                             : static_cast<uint32_t>(dataLen) > info->payload)
+        {
+            std::cerr << "raccoon::Transport: " << dataLen << " bytes do not fit '"
+                      << channel << "' (" << info->type
+                      << (info->fixed_size ? ", exactly " : ", at most ")
+                      << info->payload << " bytes)\n";
+            return false;
+        }
 
         // Deduplication: when the caller opts in, drop value-channel
         // publishes whose payload is byte-identical to the previous one.
@@ -681,33 +627,7 @@ namespace raccoon
             }
         }
 
-        int rc = rrb_writer_publish(w, data, static_cast<size_t>(dataLen));
-        if (rc != 0)
-        {
-            // Only failure path in raccoon_ring's publish is "payload
-            // too big for the ring's max_payload". writerFor sizes the
-            // ring on first publish; if a LATER publish exceeds it we
-            // tear down the writer and re-create it with a bigger ring
-            // (rrb_writer_create wipes + re-inits the SHM file in place,
-            // readers re-sync on their next recv). Surface the resize so
-            // log readers can correlate any seq discontinuity with it.
-            std::cerr << "raccoon::Transport: rrb_writer_publish('"
-                      << channel << "') rejected " << dataLen
-                      << "-byte payload — resizing ring\n";
-            w = impl_->growWriter(channel, (size_t)dataLen);
-            if (!w) return false;
-            rc = rrb_writer_publish(w, data, static_cast<size_t>(dataLen));
-            if (rc == 0)
-            {
-                if (options.reliable)
-                    impl_->recordReliable(channel, data, dataLen, options);
-                return true;
-            }
-            std::cerr << "raccoon::Transport: rrb_writer_publish('"
-                << channel << "') still rejected " << dataLen
-                << "-byte payload after resize\n";
-            return false;
-        }
+        if (rrb_writer_publish(w, data, static_cast<size_t>(dataLen)) != 0) return false;
         if (options.reliable)
             impl_->recordReliable(channel, data, dataLen, options);
         return true;
@@ -750,15 +670,6 @@ namespace raccoon
             if (!sub) return false;
             sub->handlers.push_back(std::move(handler));
             fresh_channel = (impl_->subscribers.size() > pre);
-            // Retain-on-attach: if the caller asked for the latest cached
-            // frame AND this is a fresh underlying subscriber (no prior
-            // handler already drained the ring), seek the reader to the
-            // last published seq so the next recv() hands out the cached
-            // frame instead of walking from the oldest slot. Only fires
-            // for fresh_channel — reusing an existing reader would
-            // re-deliver an already-dispatched frame to other handlers.
-            if (fresh_channel && options.requestRetained)
-                rrb_reader_seek_to_latest(sub->reader);
         }
         // If a NEW channel was opened, the spin thread's waitv list no
         // longer reflects reality — wake it so it re-snapshots and

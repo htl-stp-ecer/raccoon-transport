@@ -51,7 +51,7 @@ namespace
 
     std::vector<uint8_t> payload(int64_t ts, uint8_t value = 0)
     {
-        std::vector<uint8_t> p(16, 0);
+        std::vector<uint8_t> p(12, 0);  // the size of scalar_i32_t
         for (int i = 0; i < 8; ++i) p[i] = static_cast<uint8_t>((ts >> (8 * (7 - i))) & 0xFF);
         p[8] = value;
         return p;
@@ -59,7 +59,7 @@ namespace
 
     void testStopThenDestroyWithReliableThread()
     {
-        const std::string CH = "test/lifecycle/reliable_stop";
+        const std::string CH = "hardware/motor/0/cmd/velocity";
         removeRing(CH);
         {
             raccoon::Transport t = raccoon::Transport::create();
@@ -80,7 +80,7 @@ namespace
 
     void testShutdownWhileSpinning()
     {
-        const std::string CH = "test/lifecycle/shutdown_spin";
+        const std::string CH = "messages/warn";
         for (int round = 0; round < 60; ++round)
         {
             removeRing(CH);
@@ -105,7 +105,7 @@ namespace
 
     void testSubscribeWhileDispatching()
     {
-        const std::string CH = "test/lifecycle/subscribe_dispatch";
+        const std::string CH = "messages/error";
         removeRing(CH);
         raccoon::Transport t = raccoon::Transport::create();
         std::atomic<bool> stop{false};
@@ -138,7 +138,7 @@ namespace
 
     void testShutdownFromHandler()
     {
-        const std::string CH = "test/lifecycle/shutdown_from_handler";
+        const std::string CH = "camera/cmd/request";
         removeRing(CH);
         std::atomic<bool> done{false};
         {
@@ -162,7 +162,7 @@ namespace
 
     void testHandlerExceptionIsReported()
     {
-        const std::string CH = "test/lifecycle/handler_throws";
+        const std::string CH = "camera/response";
         removeRing(CH);
         raccoon::Transport t = raccoon::Transport::create();
         std::atomic<int> reports{0};

@@ -178,11 +178,11 @@ namespace
     // Case 1: 1 ms poll loop (matches LcmBroker's spinOnce(1) cadence).
     void testSingleColdSendPolling()
     {
-        const std::string channel = "raccoon/test/single_cold_poll";
+        const std::string channel = "messages/error";
         ChannelCleanup cleanup(channel);
 
         ReaderPump reader({channel}, /*blockingTimeoutMs=*/0);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));  // let it park lazy
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));  // let it park
 
         publishOnce(channel, "only-one");
 
@@ -197,21 +197,20 @@ namespace
     // parked thread. The cold single send must still be delivered.
     void testSingleColdSendBlockingNoOtherTraffic()
     {
-        const std::string warm = "raccoon/test/warm_channel";
-        const std::string cold = "raccoon/test/single_cold_blocking";
+        const std::string warm = "messages/warn";
+        const std::string cold = "camera/cmd/request";
         ChannelCleanup cleanupWarm(warm);
         ChannelCleanup cleanupCold(cold);
 
-        // Establish the warm channel first so the reader attaches + parks on it.
-        publishOnceKeepalive(warm, "warm-0");
-
+        // The reader subscribes first (a new reader starts after the latest frame),
+        // then a frame on the warm channel makes it park on a busy ring.
         ReaderPump reader({warm, cold}, /*blockingTimeoutMs=*/2000);
+        publishOnceKeepalive(warm, "warm-0");
         require(reader.waitForCount(warm, 1, std::chrono::seconds(2)),
                 "warm channel priming frame not delivered");
 
         // Give the reader time to re-enter a long blocking wait on the warm
-        // channel's wake_seq. The cold channel is still lazy (base == NULL),
-        // so it is NOT in the futex_waitv list.
+        // channel's wake_seq.
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
         publishOnce(cold, "cold-only");
@@ -228,7 +227,7 @@ namespace
     // delay. The child exits 0 iff it received the frame.
     void testSingleColdSendCrossProcess()
     {
-        const std::string channel = "raccoon/test/single_cold_xproc";
+        const std::string channel = "camera/response";
         ChannelCleanup cleanup(channel);
 
         pid_t pid = fork();
