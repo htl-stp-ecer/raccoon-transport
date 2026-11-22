@@ -8,7 +8,11 @@ import subprocess
 import threading
 
 
-BUILD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "build", "cpp", "tools")
+# CMake puts the interop tools into <build dir>/cpp/tools (RACCOON_BUILD_DIR, default ./build).
+BUILD_DIR = os.path.join(
+    os.environ.get("RACCOON_BUILD_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "build")),
+    "cpp", "tools",
+)
 
 
 class CppHelper:

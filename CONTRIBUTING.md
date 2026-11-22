@@ -136,13 +136,19 @@ python3 -m pytest python/tests
 
 ### Integration tests (cross-language)
 
+Python, C++ and Dart run as separate processes and talk through the shared-memory rings: every pair of languages for each message type, the encoded bytes, retained and reliable channels, and load.
+
 ```bash
-# Prerequisites: build C++, Dart, and install the Python package
-PYTHONPATH=. pytest integration_tests/ -v
-PYTHONPATH=. pytest integration_tests/test_cross_pubsub.py -v
+# Prerequisites: build C++ (the interop tools are in build/cpp/tools) and install the Python package
+pip install -e python/ pytest
+PYTHONPATH=. pytest integration_tests/ -v -m "not dart"       # Python and C++
+
+# The tests with Dart also need `dart` and the C bridge:
+CXX=g++ CC_CROSS=gcc bash cpp/bridge/build.sh
+PYTHONPATH=. pytest integration_tests/ -v -m dart
 ```
 
-CI runs the integration tests for information; their result does not block a release.
+`RACCOON_BUILD_DIR` points at another CMake build directory, `RACCOON_BRIDGE_DIR` at another directory with `libraccoon_transport_bridge.so`. A test whose tool is missing is skipped. CI runs the tests without Dart as a gate and the Dart tests next to it.
 
 ---
 

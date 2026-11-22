@@ -3,12 +3,24 @@
 import json
 import os
 import queue
+import shutil
 import signal
 import subprocess
 import threading
 
 
 DART_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "dart")
+# The Dart tools load libraccoon_transport_bridge.so from here (built by cpp/bridge/build.sh).
+BRIDGE_DIR = os.environ.get(
+    "RACCOON_BRIDGE_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "cpp", "bridge")
+)
+
+
+def available() -> bool:
+    """True when `dart` and the bridge library are there."""
+    return shutil.which("dart") is not None and os.path.isfile(
+        os.path.join(BRIDGE_DIR, "libraccoon_transport_bridge.so")
+    )
 
 
 class DartHelper:
@@ -19,6 +31,7 @@ class DartHelper:
         self._proc = subprocess.Popen(
             cmd,
             cwd=DART_DIR,
+            env={**os.environ, "RACCOON_BRIDGE_DIR": os.path.abspath(BRIDGE_DIR)},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,

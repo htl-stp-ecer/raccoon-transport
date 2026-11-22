@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:raccoon_transport/raccoon_transport.dart';
 
+// The tool loads libraccoon_transport_bridge.so from the directory in RACCOON_BRIDGE_DIR.
+
 void _printEvent(Map<String, dynamic> event) {
   stdout.writeln(jsonEncode(event));
 }
@@ -36,15 +38,18 @@ LcmMessage _createMessage(String type, Map<String, dynamic> values) {
   }
 }
 
+Uint8List _encode(LcmMessage msg) {
+  final buf = LcmBuffer(65536);
+  msg.encode(buf);
+  return Uint8List.sublistView(buf.uint8List, 0, buf.position);
+}
+
 Future<void> main(List<String> args) async {
-  // --encode-hex <type> <json_values>: encode to hex without network
+  // --encode-hex <type> <json_values>: encode to hex without a transport
   if (args.isNotEmpty && args[0] == '--encode-hex') {
     final type = args[1];
     final values = jsonDecode(args[2]) as Map<String, dynamic>;
-    final msg = _createMessage(type, values);
-    final buf = LcmBuffer(65536);
-    msg.encode(buf);
-    final data = Uint8List.sublistView(buf.uint8List, 0, buf.position);
+    final data = _encode(_createMessage(type, values));
     final hex = data.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     _printEvent({'event': 'encoded', 'hex': hex});
     exit(0);
@@ -56,7 +61,6 @@ Future<void> main(List<String> args) async {
 
   int count = 1;
   int intervalMs = 0;
-  bool retained = false;
   bool reliable = false;
 
   for (int i = 3; i < args.length; i++) {
@@ -65,29 +69,32 @@ Future<void> main(List<String> args) async {
         count = int.parse(args[++i]);
       case '--interval-ms':
         intervalMs = int.parse(args[++i]);
-      case '--retained':
-        retained = true;
       case '--reliable':
         reliable = true;
     }
   }
 
-  final transport = await RaccoonTransport.create();
+  final libraryDir = Platform.environment['RACCOON_BRIDGE_DIR'];
+  if (libraryDir != null) setLibraryPath(libraryDir);
+  final transport = await RaccoonRingTransport.create('interop_publish');
 
   try {
-    final options = PublishOptions(retained: retained, reliable: reliable);
     for (int seq = 0; seq < count; seq++) {
       final msg = _createMessage(type, values);
-      transport.publishMessage(channel, msg, options: options);
+      final result = transport.publish(channel, _encode(msg), typeName: type);
+      if (result != PublishResult.ok) {
+        stderr.writeln('publish refused: ${result.name}');
+        exit(1);
+      }
       _printEvent({'event': 'published', 'seq': seq});
       if (intervalMs > 0 && seq < count - 1) {
         await Future.delayed(Duration(milliseconds: intervalMs));
       }
     }
 
-    if (retained || reliable) {
+    if (reliable) {
       _printEvent({'event': 'ready'});
-      // Stay alive to serve retain requests / process reliable ACKs
+      // Stay alive until the parent closes stdin: the transport repeats the frame until it is acknowledged.
       await stdin.drain();
     }
   } finally {

@@ -131,22 +131,21 @@ jobs:
         timeout-minutes: 5
 
       # ── Integration tests ────────────────────────────────
-      # These exercise cross-language pub/sub, retain, reliable, and fingerprint
-      # compat between Python, C++, and Dart. Most are currently broken
-      # because:
-      #   * cc7d9e7 dropped lcm-gen + LCM fingerprints from the Dart messages,
-      #     so test_message_compat::test_*fingerprint_match has nothing to
-      #     match against.
-      #   * c746cf2 dropped reliable + retain on the C++ + Python sides.
-      #   * Cross-language UDP-multicast suites need IP multicast, which
-      #     GitHub-hosted runners don't enable.
-      # Run them for observability but don't block the release — the
-      # production transport (raccoon_ring SHM) is covered by the C++/Dart/
-      # Python unit suites above. Re-tighten once the cross-language layer
-      # gets rebuilt on top of the new wire format.
-      - name: Run integration tests
+      # Python, C++ and Dart in separate processes, talking through the shared-memory rings: every
+      # pair of languages for each message type, the encoding bytes, retained and reliable channels,
+      # load. The C++ tools come from the build above, the Dart tools use the C bridge.
+      - name: Build the C bridge for the Dart tools
+        run: CXX=g++ CC_CROSS=gcc bash cpp/bridge/build.sh
+
+      - name: Integration tests (Python and C++)
+        run: PYTHONPATH=. python3 -m pytest integration_tests/ -v -m "not dart"
+        timeout-minutes: 10
+
+      # The tests that start a Dart tool. They are not blocking until they have run here once.
+      - name: Integration tests (Dart)
         continue-on-error: true
-        run: PYTHONPATH=. python3 -m pytest integration_tests/ -v
+        run: PYTHONPATH=. python3 -m pytest integration_tests/ -v -m dart
+        timeout-minutes: 10
 
   build-and-release:
     needs: [build-and-test, version]

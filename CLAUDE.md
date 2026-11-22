@@ -86,10 +86,9 @@ python3 -m pytest python/tests
 
 ### Integration Tests:
 ```bash
-# Prerequisites: build C++, Dart, and install Python package (see above)
-PYTHONPATH=. pytest integration_tests/ -v
-PYTHONPATH=. pytest integration_tests/ -v -k "cpp"
-PYTHONPATH=. pytest integration_tests/ -v -k "dart"
+# Prerequisites: build C++ (tools in build/cpp/tools), pip install -e python/ pytest
+PYTHONPATH=. pytest integration_tests/ -v -m "not dart"   # Python and C++
+PYTHONPATH=. pytest integration_tests/ -v -m dart         # needs dart and the C bridge (cpp/bridge/build.sh)
 ```
 CI runs them without gating the release.
 

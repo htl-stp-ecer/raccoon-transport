@@ -42,7 +42,7 @@ raccoon-transport/
 ├── dart/                # Dart transport package and message classes
 ├── contract/            # Contract hash, startup-check spec and test vectors
 ├── scripts/             # contract.py (hash generator and check)
-├── integration_tests/   # Cross-language compatibility and stress tests
+├── integration_tests/   # Cross-language tests: pub/sub, encoding, retained, reliable, load
 ├── build.py             # Builds the Python wheel and contract assets in Docker
 └── deploy.py            # Installs a local build on a Pi
 ```
@@ -148,14 +148,15 @@ python3 scripts/contract.py --check   # fails if a generated file is stale or th
 
 ## Integration Tests
 
-Cross-language tests between Python, Dart and C++:
+Python, C++ and Dart in separate processes, talking through the shared-memory rings (see CONTRIBUTING.md for the prerequisites):
 
 ```bash
-PYTHONPATH=. pytest integration_tests/ -v
+PYTHONPATH=. pytest integration_tests/ -v -m "not dart"   # Python and C++
 
 # Filter by suite
 PYTHONPATH=. pytest integration_tests/test_cross_pubsub.py -v
-PYTHONPATH=. pytest integration_tests/test_retain.py -v
+PYTHONPATH=. pytest integration_tests/test_retained.py -v
+PYTHONPATH=. pytest integration_tests/test_reliable.py -v
 PYTHONPATH=. pytest integration_tests/test_stress.py -v
 ```
 

@@ -57,14 +57,12 @@ Future<void> main(List<String> args) async {
     exit(0);
   }
 
-  // Normal subscribe mode: <channel> <type> [--count N] [--timeout-ms MS] [--request-retained]
+  // Normal subscribe mode: <channel> <type> [--count N] [--timeout-ms MS]
   final channel = args[0];
   final type = args[1];
 
   int count = 1;
   int timeoutMs = 5000;
-  bool requestRetained = false;
-  bool reliable = false;
 
   for (int i = 2; i < args.length; i++) {
     switch (args[i]) {
@@ -72,14 +70,13 @@ Future<void> main(List<String> args) async {
         count = int.parse(args[++i]);
       case '--timeout-ms':
         timeoutMs = int.parse(args[++i]);
-      case '--request-retained':
-        requestRetained = true;
-      case '--reliable':
-        reliable = true;
     }
   }
 
-  final transport = await RaccoonTransport.create();
+  final libraryDir = Platform.environment['RACCOON_BRIDGE_DIR'];
+  if (libraryDir != null) setLibraryPath(libraryDir);
+  final transport = await RaccoonRingTransport.create('interop_subscribe');
+  transport.startSpin(intervalMs: 5);
   int received = 0;
   final completer = Completer<void>();
 
@@ -94,7 +91,7 @@ Future<void> main(List<String> args) async {
     } catch (e) {
       stderr.writeln('Decode error: $e');
     }
-  }, options: SubscribeOptions(requestRetained: requestRetained, reliable: reliable));
+  }, typeName: type);
 
   _printEvent({'event': 'subscribed'});
 
