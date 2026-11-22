@@ -14,6 +14,7 @@ from .scalar_i32_t import scalar_i32_t
 from .scalar_i8_t import scalar_i8_t
 from .screen_render_answer_t import screen_render_answer_t
 from .screen_render_t import screen_render_t
+from .message_t import message_t
 from .string_t import string_t
 from .vector3f_t import vector3f_t
 from .yolo_box_t import yolo_box_t

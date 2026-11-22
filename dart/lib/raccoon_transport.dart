@@ -25,6 +25,7 @@ export 'messages/types/scalar_i32_t.g.dart';
 export 'messages/types/scalar_i8_t.g.dart';
 export 'messages/types/screen_render_answer_t.g.dart';
 export 'messages/types/screen_render_t.g.dart';
+export 'messages/types/message_t.g.dart';
 export 'messages/types/string_t.g.dart';
 export 'messages/types/vector3f_t.g.dart';
 export 'messages/types/cam_blob_t.g.dart';

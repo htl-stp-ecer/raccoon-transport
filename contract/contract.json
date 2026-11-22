@@ -1,5 +1,5 @@
 {
-  "hash": "c93592d45d6da8ea",
+  "hash": "f037e485d24fb9eb",
   "format": 1,
   "ring": {
     "magic": 1380143682,
@@ -1384,7 +1384,7 @@
     },
     {
       "name": "messages/error",
-      "type": "string_t",
+      "type": "message_t",
       "slots": 64,
       "payload": 1048576,
       "reliable": false,
@@ -1392,7 +1392,7 @@
     },
     {
       "name": "messages/warn",
-      "type": "string_t",
+      "type": "message_t",
       "slots": 64,
       "payload": 1048576,
       "reliable": false,
@@ -1602,6 +1602,20 @@
       [
         "bemf_offset",
         "array<f32,4>"
+      ]
+    ],
+    "message_t": [
+      [
+        "timestamp",
+        "i64"
+      ],
+      [
+        "title",
+        "string"
+      ],
+      [
+        "content",
+        "string"
       ]
     ],
     "orientation_matrix_t": [

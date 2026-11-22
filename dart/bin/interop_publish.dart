@@ -33,6 +33,12 @@ LcmMessage _createMessage(String type, Map<String, dynamic> values) {
         timestamp: values['timestamp'] as int,
         value: values['value'] as String,
       );
+    case 'message_t':
+      return MessageT(
+        timestamp: values['timestamp'] as int,
+        title: values['title'] as String,
+        content: values['content'] as String,
+      );
     default:
       throw ArgumentError('Unknown type: $type');
   }

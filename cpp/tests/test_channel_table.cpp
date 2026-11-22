@@ -49,7 +49,7 @@ int main()
     check(render != nullptr && !render->fixed_size && render->payload == 32u * 1024 * 1024 && render->slots == 3,
           "the screen render is limited to 32 MiB in 3 slots");
     const ChannelInfo* error = find_channel(messages::ERROR);
-    check(error != nullptr && error->type == "string_t" && !error->retained, "messages/error is an event");
+    check(error != nullptr && error->type == "message_t" && !error->retained, "messages/error is an event");
 
     // The latch and the chassis stop are reliable, the chassis velocity stream is not.
     check(find_channel(hardware::latch::cmd::ENGAGED)->reliable, "latch is reliable");

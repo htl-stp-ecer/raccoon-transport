@@ -91,8 +91,8 @@ channels:
   - {name: system/state/cpu_temperature, type: scalar_f_t, doc: "Pi CPU temperature (deg C)."}
 
   # ---- messages for the user (events, not retained) -----------------------------------
-  - {name: messages/error, type: string_t, slots: 64, max_payload: 1MiB, doc: "Error shown to the user. The sender puts its name in front of the text."}
-  - {name: messages/warn,  type: string_t, slots: 64, max_payload: 1MiB, doc: "Warning shown to the user, no dialog."}
+  - {name: messages/error, type: message_t, slots: 64, max_payload: 1MiB, doc: "Error shown to the user as a dialog: a title and the text below it."}
+  - {name: messages/warn,  type: message_t, slots: 64, max_payload: 1MiB, doc: "Warning shown to the user as a dialog: a title and the text below it."}
 
   # ---- protocol -------------------------------------------------------------------------
   - {name: protocol/ack, type: ack_t, slots: 64, max_payload: 256B, doc: "Acknowledgement of a reliable command, written by every process that acknowledges."}

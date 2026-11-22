@@ -18,6 +18,7 @@ add_library(raccoon_messages STATIC
     types/scalar_i8_t.cpp
     types/screen_render_answer_t.cpp
     types/screen_render_t.cpp
+    types/message_t.cpp
     types/string_t.cpp
     types/vector3f_t.cpp
     types/yolo_box_t.cpp

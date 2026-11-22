@@ -2,6 +2,7 @@
 
 #include "raccoon/scalar_f_t.hpp"
 #include "raccoon/scalar_i32_t.hpp"
+#include "raccoon/message_t.hpp"
 #include "raccoon/string_t.hpp"
 #include "raccoon/vector3f_t.hpp"
 
@@ -198,6 +199,12 @@ inline std::vector<uint8_t> createAndEncode(const std::string& type,
         msg.timestamp = getInt(values.at("timestamp"));
         msg.value = getString(values.at("value"));
         return encodeMsg(msg);
+    } else if (type == "message_t") {
+        raccoon::message_t msg{};
+        msg.timestamp = getInt(values.at("timestamp"));
+        msg.title = getString(values.at("title"));
+        msg.content = getString(values.at("content"));
+        return encodeMsg(msg);
     }
     throw std::runtime_error("Unknown type: " + type);
 }
@@ -230,6 +237,12 @@ inline std::string messageToJson(const std::string& type, const void* data,
         msg.decode(static_cast<const uint8_t*>(data), dataLen);
         return "{\"timestamp\":" + std::to_string(msg.timestamp) +
                ",\"value\":\"" + escapeJsonString(msg.value) + "\"}";
+    } else if (type == "message_t") {
+        raccoon::message_t msg{};
+        msg.decode(static_cast<const uint8_t*>(data), dataLen);
+        return "{\"timestamp\":" + std::to_string(msg.timestamp) +
+               ",\"title\":\"" + escapeJsonString(msg.title) +
+               "\",\"content\":\"" + escapeJsonString(msg.content) + "\"}";
     }
     throw std::runtime_error("Unknown type: " + type);
 }

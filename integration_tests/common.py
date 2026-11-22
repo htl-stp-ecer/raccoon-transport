@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from raccoon_transport.types.raccoon import scalar_f_t, scalar_i32_t, string_t, vector3f_t
+from raccoon_transport.types.raccoon import scalar_f_t, message_t, scalar_i32_t, string_t, vector3f_t
 from integration_tests.conftest import Collector, reset_ring
 
 
@@ -24,7 +24,9 @@ KINDS = {
     "scalar_i32_t": Kind("scalar_i32_t", scalar_i32_t, "hardware/watchdog/cmd/heartbeat", {"timestamp": 2000, "value": -7}),
     "vector3f_t": Kind("vector3f_t", vector3f_t, "hardware/chassis/cmd/velocity",
                        {"timestamp": 3000, "x": 1.0, "y": -2.5, "z": 0.25}),
-    "string_t": Kind("string_t", string_t, "messages/warn", {"timestamp": 4000, "value": "grüße ✓"}),
+    "string_t": Kind("string_t", string_t, "camera/state/status", {"timestamp": 4000, "value": "grüße ✓"}),
+    "message_t": Kind("message_t", message_t, "messages/warn",
+                      {"timestamp": 5000, "title": "Slow loop", "content": "grüße ✓\nsecond line"}),
 }
 
 TOOL = {"cpp": ("interop_publish", "interop_subscribe"), "dart": ("interop_publish.dart", "interop_subscribe.dart")}

@@ -19,6 +19,8 @@ LcmMessage _decodeMessage(String type, Uint8List data) {
       return Vector3fT.decode(buf);
     case 'string_t':
       return StringT.decode(buf);
+    case 'message_t':
+      return MessageT.decode(buf);
     default:
       throw ArgumentError('Unknown type: $type');
   }
@@ -38,6 +40,9 @@ Map<String, dynamic> _messageToJson(String type, LcmMessage msg) {
     case 'string_t':
       final m = msg as StringT;
       return {'timestamp': m.timestamp, 'value': m.value};
+    case 'message_t':
+      final m = msg as MessageT;
+      return {'timestamp': m.timestamp, 'title': m.title, 'content': m.content};
     default:
       throw ArgumentError('Unknown type: $type');
   }

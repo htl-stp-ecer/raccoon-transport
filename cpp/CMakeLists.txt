@@ -55,6 +55,10 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_unit_tests COMMAND raccoon_transport_unit_tests)
 
+    add_executable(raccoon_transport_message_tests tests/test_message_t.cpp)
+    target_link_libraries(raccoon_transport_message_tests PRIVATE raccoon_transport)
+    add_test(NAME raccoon_transport_message_tests COMMAND raccoon_transport_message_tests)
+
     add_executable(raccoon_transport_single_cold_send_tests
         tests/test_single_cold_send.cpp)
     target_link_libraries(raccoon_transport_single_cold_send_tests PRIVATE
