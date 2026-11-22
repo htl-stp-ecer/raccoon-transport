@@ -88,6 +88,13 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME raccoon_transport_ring_tests COMMAND raccoon_transport_ring_tests)
 
+    add_executable(raccoon_transport_bridge_tests
+        tests/test_bridge.cpp bridge/raccoon_transport_bridge.cpp)
+    target_link_libraries(raccoon_transport_bridge_tests PRIVATE raccoon_transport)
+    target_include_directories(raccoon_transport_bridge_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bridge ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME raccoon_transport_bridge_tests COMMAND raccoon_transport_bridge_tests)
+
     add_executable(raccoon_transport_channel_table_tests
         tests/test_channel_table.cpp)
     target_include_directories(raccoon_transport_channel_table_tests PRIVATE

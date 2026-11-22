@@ -1,27 +1,21 @@
-/// Message classes and channel names of the raccoon transport, with access to the
-/// shared-memory rings (RaccoonRingTransport) and a separate UDP-multicast client.
+/// Message classes and channel names of the raccoon transport, and the C++ transport
+/// (shared-memory rings) through dart:ffi.
 library raccoon_transport;
 
-// Message buffer and the UDP-multicast client. The message classes are written by
-// hand (big-endian, no fingerprint); the UDP client does not use shared memory.
+// Byte buffer that the message classes encode to and decode from (big-endian).
 export 'src/lcm/lcm_buffer.dart';
-export 'src/lcm/lcm.dart';
 
-// Transport
-export 'src/channels.dart';
 export 'src/channel_table.dart';
 export 'src/contract.dart';
 export 'src/contract_check.dart';
-export 'src/transport.dart';
 
-// raccoon_ring SHM transport — Dart FFI bridge around raccoon_ring
-// (cpp/src/raccoon_ring.c). Use this on Flutter/Dart clients that talk to the
-// C++ components (stm32-data-reader, raccoon-lib) through shared memory.
+// The C++ transport through its C bridge (cpp/bridge): publish and subscribe on the
+// shared-memory rings, the same transport the C++ and Python components use.
 //
-// Requires libraccoon_ring_bridge.so on the dlopen() search path. Build
-// it via cpp/bridge/build.sh (cross-compiles for aarch64 Pi by default).
+// Requires libraccoon_transport_bridge.so on the dlopen() search path. Build it
+// with cpp/bridge/build.sh (cross-compiles for the aarch64 Pi by default).
 export 'src/ring/transport.dart';
-export 'src/ring/raccoon_ring_bridge_ffi.dart' show setLibraryPath;
+export 'src/ring/transport_bridge_ffi.dart' show setLibraryPath;
 
 // Generated message types
 export 'messages/types/orientation_matrix_t.g.dart';

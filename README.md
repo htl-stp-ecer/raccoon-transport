@@ -196,7 +196,7 @@ Defined in `messages/types/` under the `raccoon` namespace. The wire format is w
 ### Language-Specific Notes
 
 - **C++**: Message structs live in `messages/`, the transport library in `cpp/`. Transport uses the PIMPL pattern.
-- **Dart**: Message classes in `dart/lib/messages/` (written by hand, no code generation). `RaccoonRingTransport` reaches the rings through `libraccoon_ring_bridge.so`, built with `cpp/bridge/build.sh`. The package also contains a separate UDP-multicast client (`lib/src/lcm/`, `lib/src/transport.dart`) that does not use shared memory.
+- **Dart**: Message classes in `dart/lib/messages/` (written by hand, no code generation). `RaccoonRingTransport` is the C++ transport through `libraccoon_transport_bridge.so`, built with `cpp/bridge/build.sh`.
 - **Python**: Message classes in `python/raccoon_transport/types/raccoon/`, channel names in `python/raccoon_transport/channel_table.py` (generated), and `raccoon_transport.Transport`, a pybind11 wrapper (`python/src/native.cpp`) around the C++ transport.
 
 ---

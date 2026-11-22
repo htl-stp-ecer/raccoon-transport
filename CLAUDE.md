@@ -60,7 +60,7 @@ python3 build.py                  # contract check + wheel + contract assets -> 
 python3 build.py --version 71     # release build (what CI does)
 python3 deploy.py --host <pi>     # install builds/ wheel on the Pi, sets raccoon-transport to "dev" in its bundle file
 ```
-Only `build.py` and `deploy.py` build and install the wheel; CI runs `build.py` too. `deploy.py` is for local builds; releases are installed by `raccoon update`. C++ and Dart are used as source (submodule) and tested in CI. Do not remove `cpp/bridge/build.sh`: botui and stm32-data-reader build their ring bridge with it.
+Only `build.py` and `deploy.py` build and install the wheel; CI runs `build.py` too. `deploy.py` is for local builds; releases are installed by `raccoon update`. C++ and Dart are used as source (submodule) and tested in CI. Do not remove `cpp/bridge/build.sh`: botui builds its transport bridge with it.
 
 ### C++ (via CMake):
 ```bash
@@ -104,11 +104,11 @@ CI runs them without gating the release.
 - `raccoon_ring.c` / `raccoon_ring.h` — the ring buffer (C API): writer, reader, futex wake, multi-channel wait.
 - `raccoon::Transport` — the public API (PIMPL): publish, subscribe, `spin_once`, reliable delivery, retain, statistics.
 - `ChannelTable.h` (generated) — every channel with its message type and ring properties; `raccoon::dedup::isCommandChannel` decides which channels are never deduplicated (a name with a `cmd` segment).
-- `cpp/bridge/` — a C library (`libraccoon_ring_bridge.so`) that the Dart package loads through FFI.
+- `cpp/bridge/` — the C interface of `raccoon::Transport` (`raccoon_transport_bridge.h`, built by `build.sh` into `libraccoon_transport_bridge.so`) that the Dart package loads through FFI. The bridge queues the frames of each subscription (the latest 64); Dart polls them.
 
 ### Dart Package (`dart/`)
-- `RaccoonRingTransport` (`lib/src/ring/transport.dart`) reaches the rings through the C bridge.
-- `lib/src/lcm/`, `lib/src/transport.dart` and `lib/src/reliable.dart` are a separate UDP-multicast client that does not use shared memory.
+- `RaccoonRingTransport` (`lib/src/ring/transport.dart`) is the C++ transport through the C bridge: `publish` returns a `PublishResult`, `subscribe` takes a handler that `spinOnce()` (or the timer of `startSpin`) calls.
+- `lib/src/lcm/lcm_buffer.dart` is the byte buffer that the message classes encode to and decode from; the Dart package has no transport of its own.
 
 ### Python Package (`python/`)
 - Message classes in `raccoon_transport/types/raccoon/`, the channel names in `channel_table.py` (generated) and the contract check.

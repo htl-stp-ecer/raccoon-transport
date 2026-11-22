@@ -125,7 +125,7 @@ python3 -m unittest scripts/test_contract.py scripts/test_channels.py python/tes
 ```bash
 cd dart
 dart analyze
-dart test test/transport_unit_test.dart test/contract_check_test.dart
+dart test test/contract_check_test.dart test/channel_table_test.dart
 ```
 
 ### Python
