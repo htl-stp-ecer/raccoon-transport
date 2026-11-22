@@ -10,7 +10,7 @@ import pytest
 
 import raccoon_transport as rt
 from raccoon_transport import channels
-from raccoon_transport.types.raccoon import scalar_f_t, scalar_i32_t
+from raccoon_transport.types.raccoon import scalar_f_t, scalar_i32_t, string_t
 
 pytestmark = pytest.mark.skipif(not rt.NATIVE, reason="no native module (pure install)")
 
@@ -74,6 +74,30 @@ def test_errors_say_why(transport):
         transport.subscribe("not/in/table", lambda ch, d: None)
     with pytest.raises(RuntimeError):
         transport.subscribe(channels.hardware.motor.cmd.power(0), lambda ch, d: None, message_type=scalar_f_t)
+
+
+def test_publish_returns_none_when_it_worked(transport):
+    channel = channels.hardware.watchdog.cmd.HEARTBEAT
+    assert transport.publish(channel, scalar_i32_t(timestamp=1, value=0)) is None
+    assert transport.publish_raw(channel, scalar_i32_t(timestamp=2, value=0).encode()) is None
+
+
+def test_a_raw_frame_of_the_wrong_size_is_a_type_mismatch(transport):
+    with pytest.raises(rt.PublishError) as info:
+        transport.publish_raw(channels.hardware.motor.cmd.power(0), b"123")
+    assert info.value.result == rt.PublishResult.TypeMismatch
+
+
+def test_a_frame_over_the_limit_of_the_channel_is_too_big(transport):
+    # messages/error takes up to 1 MiB, protocol/ack up to 256 B (both in channels.yml).
+    with pytest.raises(rt.PublishError) as info:
+        transport.publish(channels.messages.ERROR, string_t(timestamp=1, value="x" * (1536 * 1024)))
+    assert info.value.result == rt.PublishResult.TooBig
+    with pytest.raises(rt.PublishError) as info:
+        transport.publish_raw("protocol/ack", b"x" * 1000)
+    assert info.value.result == rt.PublishResult.TooBig
+    # A frame just under the limit still goes out.
+    assert transport.publish(channels.messages.ERROR, string_t(timestamp=2, value="x" * 1000)) is None
 
 
 def test_unsubscribe_stops_delivery(transport):
