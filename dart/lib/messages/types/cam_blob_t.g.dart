@@ -13,8 +13,11 @@ class CamBlobT implements LcmMessage {
   double y;
   double width;
   double height;
-  int area;
+  double area;
   double confidence;
+
+  /// ARGB colour for drawing the detection, 0 = the UI's default.
+  int color;
 
   CamBlobT({
     required this.timestamp,
@@ -25,6 +28,7 @@ class CamBlobT implements LcmMessage {
     required this.height,
     required this.area,
     required this.confidence,
+    this.color = 0,
   });
 
   @override
@@ -47,8 +51,9 @@ class CamBlobT implements LcmMessage {
     buf.putFloat32(y);
     buf.putFloat32(width);
     buf.putFloat32(height);
-    buf.putInt32(area);
+    buf.putFloat32(area);
     buf.putFloat32(confidence);
+    buf.putInt32(color);
   }
 
   static CamBlobT decode(LcmBuffer buf) {
@@ -66,8 +71,9 @@ class CamBlobT implements LcmMessage {
     final y = buf.getFloat32();
     final width = buf.getFloat32();
     final height = buf.getFloat32();
-    final area = buf.getInt32();
+    final area = buf.getFloat32();
     final confidence = buf.getFloat32();
+    final color = buf.getInt32();
 
     return CamBlobT(
       timestamp: timestamp,
@@ -78,6 +84,7 @@ class CamBlobT implements LcmMessage {
       height: height,
       area: area,
       confidence: confidence,
+      color: color,
     );
   }
 }

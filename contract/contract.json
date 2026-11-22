@@ -1,5 +1,5 @@
 {
-  "hash": "f037e485d24fb9eb",
+  "hash": "51cd6d3453038d46",
   "format": 1,
   "ring": {
     "magic": 1380143682,
@@ -1482,6 +1482,10 @@
       [
         "confidence",
         "f32"
+      ],
+      [
+        "color",
+        "i32"
       ]
     ],
     "cam_config_t": [

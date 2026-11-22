@@ -17,6 +17,8 @@ namespace raccoon
         float height = 0.0f;
         float area = 0.0f;
         float confidence = 0.0f;
+        /// ARGB colour for drawing the detection, 0 = the UI's default. The alpha byte is 0xFF when set.
+        int32_t color = 0;
 
         [[nodiscard]] int encoded_size() const noexcept;
         int encode(uint8_t* buf, int buf_len) const noexcept;

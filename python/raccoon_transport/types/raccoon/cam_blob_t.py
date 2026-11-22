@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ._codec import pack_f32, pack_i64, pack_string, read_f32, read_i64, read_string
+from ._codec import pack_f32, pack_i32, pack_i64, pack_string, read_f32, read_i32, read_i64, read_string
 
 
 @dataclass
@@ -15,6 +15,7 @@ class cam_blob_t:
     height: float = 0.0
     area: float = 0.0
     confidence: float = 0.0
+    color: int = 0  # ARGB as a signed 32-bit integer, 0 = default
 
     def encode(self) -> bytes:
         return b"".join(
@@ -27,6 +28,7 @@ class cam_blob_t:
                 pack_f32(self.height),
                 pack_f32(self.area),
                 pack_f32(self.confidence),
+                pack_i32(self.color),
             ]
         )
 
@@ -40,6 +42,7 @@ class cam_blob_t:
         height, offset = read_f32(data, offset)
         area, offset = read_f32(data, offset)
         confidence, offset = read_f32(data, offset)
+        color, offset = read_i32(data, offset)
         return (
             cls(
                 timestamp=timestamp,
@@ -50,6 +53,7 @@ class cam_blob_t:
                 height=height,
                 area=area,
                 confidence=confidence,
+                color=color,
             ),
             offset,
         )

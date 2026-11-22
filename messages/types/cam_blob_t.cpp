@@ -6,7 +6,7 @@ namespace raccoon
 {
     int cam_blob_t::encoded_size() const noexcept
     {
-        return 8 + codec::size_of_string(label) + 6 * 4;
+        return 8 + codec::size_of_string(label) + 7 * 4;
     }
 
     int cam_blob_t::encode(uint8_t* buf, int buf_len) const noexcept
@@ -19,7 +19,8 @@ namespace raccoon
             && writer.put_f32(width)
             && writer.put_f32(height)
             && writer.put_f32(area)
-            && writer.put_f32(confidence) ? writer.written() : -1;
+            && writer.put_f32(confidence)
+            && writer.put_be32(color) ? writer.written() : -1;
     }
 
     int cam_blob_t::decode(const uint8_t* buf, int buf_len) noexcept
@@ -32,6 +33,7 @@ namespace raccoon
             && reader.get_f32(width)
             && reader.get_f32(height)
             && reader.get_f32(area)
-            && reader.get_f32(confidence) ? reader.consumed() : -1;
+            && reader.get_f32(confidence)
+            && reader.get_be32(color) ? reader.consumed() : -1;
     }
 }
