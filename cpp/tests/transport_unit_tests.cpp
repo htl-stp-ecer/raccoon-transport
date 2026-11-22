@@ -318,6 +318,57 @@ namespace
         require(std::string(raccoon::to_string(R::TooBig)) == "TooBig", "to_string");
     }
 
+    void testUnsubscribeAndBackgroundSpin()
+    {
+        resetRing("hardware/motor/3/state/power");
+        auto transport = raccoon::Transport::create();
+        std::atomic<int> a{0}, b{0};
+        const auto idA = transport.subscribe_raw("hardware/motor/3/state/power", [&](const void*, int) { ++a; });
+        const auto idB = transport.subscribe_raw("hardware/motor/3/state/power", [&](const void*, int) { ++b; });
+        require(idA != 0 && idB != 0 && idA != idB, "two subscriptions on one channel get two ids");
+        require(transport.subscribe_raw("not/in/table", [](const void*, int) {}) == 0, "an unknown channel returns 0");
+        transport.start_background_spin();
+        transport.start_background_spin();  // no second thread
+
+        raccoon::scalar_i32_t msg;
+        msg.value = 1;
+        require(transport.publish("hardware/motor/3/state/power", msg) == raccoon::PublishResult::Ok, "publish");
+        auto wait = [&](std::atomic<int>& n, int want) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (n.load() < want && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return n.load() >= want;
+        };
+        require(wait(a, 1) && wait(b, 1), "both subscribers get the frame without a spin call");
+
+        transport.unsubscribe(idA);
+        msg.value = 2;
+        transport.publish("hardware/motor/3/state/power", msg);
+        require(wait(b, 2), "the other subscriber still gets frames");
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        require(a.load() == 1, "an unsubscribed handler must not be called again");
+        transport.unsubscribe(idA);  // twice is harmless
+        transport.shutdown();
+    }
+
+    void testRetainedReplayForEverySubscriber()
+    {
+        // motor/3/state/power is retained: each new subscriber gets the latest frame once,
+        // also when another subscriber of the channel already exists.
+        resetRing("hardware/motor/3/state/power");
+        auto transport = raccoon::Transport::create();
+        raccoon::scalar_i32_t msg;
+        msg.value = 77;
+        require(transport.publish("hardware/motor/3/state/power", msg) == raccoon::PublishResult::Ok, "publish");
+        int first = 0, second = 0;
+        require(transport.subscribe_raw("hardware/motor/3/state/power", [&](const void*, int) { ++first; }) != 0, "sub 1");
+        require(transport.subscribe_raw("hardware/motor/3/state/power", [&](const void*, int) { ++second; }) != 0, "sub 2");
+        spinTransport(transport);
+        require(first == 1 && second == 1, "each subscriber gets the latest frame once");
+        spinTransport(transport);
+        require(first == 1 && second == 1, "and not again");
+    }
+
     void testSlowSubscriberCallbackDoesNotBlockConcurrentSubscribe()
     {
         auto transport = raccoon::Transport::create("memq://");
@@ -461,6 +512,8 @@ int main()
         {"subscriber callback can publish back (recursive)", testSubscriberCallbackCanPublishBack},
         {"frame sizes follow the channel table", testFrameSizesAndLimits},
         {"only channels of the table exist", testStrictChannelTable},
+        {"unsubscribe and the background spin thread", testUnsubscribeAndBackgroundSpin},
+        {"every subscriber of a retained channel gets the latest frame", testRetainedReplayForEverySubscriber},
         {"slow subscriber callback does not block concurrent subscribe", testSlowSubscriberCallbackDoesNotBlockConcurrentSubscribe},
     };
 

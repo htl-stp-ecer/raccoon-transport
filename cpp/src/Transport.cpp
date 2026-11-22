@@ -134,6 +134,8 @@ namespace raccoon
         std::atomic<bool> cleanedUp{false};
         // spin_once() calls currently inside the transport (any thread).
         std::atomic<int> activeSpins{0};
+        // Thread started by start_background_spin().
+        std::thread spinThread;
 
         struct PubEntry
         {
@@ -155,19 +157,24 @@ namespace raccoon
             int64_t callbackSumUs{0};
             uint64_t callbackCount{0};
         };
+        // One subscription: its own reader (so that every subscriber of a retained
+        // channel gets the latest frame), its handler and its statistics. The spin
+        // thread holds a shared_ptr while it delivers, so unsubscribe() can drop the
+        // entry at any time.
         struct SubEntry
         {
+            uint64_t id = 0;
+            std::atomic<bool> active{true};  // false once unsubscribed
             std::string channel;
             rrb_reader_t* reader = nullptr;
-            // Copy-on-write: subscribe replaces the list, a delivery in progress keeps
-            // the one it started with, and a delivery copies one pointer, not the handlers.
-            std::shared_ptr<const std::vector<Transport::RawHandler>> handlers =
-                std::make_shared<const std::vector<Transport::RawHandler>>();
+            Transport::RawHandler handler;  // immutable after construction
             // Statistics of this channel, guarded by Impl::statsMutex.
             ChannelStatsAccumulator stats;
             // Per-channel scratch buffer for the receive copy; it grows to the
             // size of the biggest frame received.
             std::vector<uint8_t> scratch;
+
+            ~SubEntry() { if (reader) rrb_reader_close(reader); }
         };
 
         // Looked up with a string_view on every publish, without building a std::string.
@@ -180,7 +187,8 @@ namespace raccoon
             }
         };
         std::unordered_map<std::string, PubEntry, SvHash, std::equal_to<>> publishers;
-        std::vector<std::unique_ptr<SubEntry>>      subscribers;
+        std::vector<std::shared_ptr<SubEntry>>      subscribers;
+        std::atomic<uint64_t> nextSubscriptionId{1};
 
         // Coarse mutex protects every Impl mutation. Recursive so a
         // callback that publishes back does not deadlock.
@@ -274,6 +282,9 @@ namespace raccoon
                              "the process ends\n";
             }
 
+            if (!spinsLeft && spinThread.joinable() && spinThread.get_id() != std::this_thread::get_id())
+                spinThread.join();
+
             // Stop the reliability thread BEFORE taking apiMutex: the thread
             // grabs apiMutex on every tick, so joining while holding it would
             // deadlock.
@@ -288,11 +299,7 @@ namespace raccoon
                 if (pe.writer) rrb_writer_destroy(pe.writer);
             }
             publishers.clear();
-            for (auto& sub : subscribers)
-            {
-                if (sub->reader) rrb_reader_close(sub->reader);
-            }
-            subscribers.clear();
+            subscribers.clear();  // closes the readers
         }
 
         // ---- Reliable delivery ---------------------------------------------
@@ -567,24 +574,23 @@ namespace raccoon
             return w;
         }
 
-        SubEntry* subscriberFor(std::string_view channel)
+        // Open a reader for `channel` and add a subscription. Call under apiMutex.
+        std::shared_ptr<SubEntry> addSubscriber(std::string_view channel,
+                                                Transport::RawHandler handler)
         {
-            for (auto& s : subscribers)
-            {
-                if (s->channel == channel) return s.get();
-            }
             rrb_reader_t* r = openReader(channel);
             if (!r) return nullptr;
-            auto entry = std::make_unique<SubEntry>();
+            auto entry = std::make_shared<SubEntry>();
+            entry->id = nextSubscriptionId.fetch_add(1);
             entry->channel = channel;
             entry->reader = r;
+            entry->handler = std::move(handler);
             // Receive buffer per subscriber. It starts small and grows to the
             // ring's payload size when a bigger frame arrives (camera frames),
             // so a hundred small channels do not each hold a 512 KiB buffer.
             entry->scratch.resize(kInitialScratchBytes);
-            SubEntry* raw = entry.get();
-            subscribers.push_back(std::move(entry));
-            return raw;
+            subscribers.push_back(entry);
+            return entry;
         }
 
         // Sniff message timestamp from the first 8 bytes (big-endian).
@@ -640,8 +646,9 @@ namespace raccoon
 
         // Hand one frame to the handlers of a subscriber and record the statistics.
         // Called on the spin thread, without apiMutex.
-        void deliver(SubEntry* sub, const void* data, size_t len)
+        void deliver(const std::shared_ptr<SubEntry>& sub, const void* data, size_t len)
         {
+            if (!sub->active.load(std::memory_order_acquire)) return;
             const int64_t msgUs = readTimestampBE(data, static_cast<int>(len));
             int64_t latencyUs = -1;
             if (msgUs > 0)
@@ -650,13 +657,8 @@ namespace raccoon
                     std::chrono::system_clock::now().time_since_epoch()).count();
                 latencyUs = nowUs - msgUs;
             }
-            std::shared_ptr<const std::vector<Transport::RawHandler>> handlers;
-            {
-                std::lock_guard<std::recursive_mutex> lk(apiMutex);
-                handlers = sub->handlers;
-            }
             const auto t0 = std::chrono::steady_clock::now();
-            invokeHandlers(sub->channel, *handlers, data, static_cast<int>(len));
+            invokeHandler(sub->channel, sub->handler, data, static_cast<int>(len));
             const int64_t cbUs = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - t0).count();
 
@@ -685,17 +687,13 @@ namespace raccoon
             ++ch.deliveries;  // every frame handed to a handler, whatever its size
         }
 
-        // Run every handler for one frame. Exceptions are reported, not propagated.
-        void invokeHandlers(const std::string& channel,
-                            const std::vector<Transport::RawHandler>& handlers,
-                            const void* data, int len)
+        // Run a handler for one frame. An exception is reported, not propagated.
+        void invokeHandler(const std::string& channel, const Transport::RawHandler& handler,
+                           const void* data, int len)
         {
-            for (const auto& h : handlers)
-            {
-                try { h(data, len); }
-                catch (const std::exception& e) { reportHandlerError(channel, e.what()); }
-                catch (...) { reportHandlerError(channel, "unknown exception"); }
-            }
+            try { handler(data, len); }
+            catch (const std::exception& e) { reportHandlerError(channel, e.what()); }
+            catch (...) { reportHandlerError(channel, "unknown exception"); }
         }
     };
 
@@ -774,18 +772,19 @@ namespace raccoon
         return PublishResult::Ok;
     }
 
-    bool Transport::subscribe_typed(std::string_view channel, const char* type_name,
-                                    RawHandler handler)
+    Transport::SubscriptionId Transport::subscribe_typed(std::string_view channel, const char* type_name,
+                                                         RawHandler handler)
     {
         const channels::ChannelInfo* info = channels::find_channel(channel);
-        if (!info || (type_name && info->type != type_name)) return false;
+        if (!info || (type_name && info->type != type_name)) return 0;
         return subscribe_raw(channel, std::move(handler));
     }
 
-    bool Transport::subscribe_raw(std::string_view channel, RawHandler handler)
+    Transport::SubscriptionId Transport::subscribe_raw(std::string_view channel, RawHandler handler)
     {
-        if (!impl_ || !impl_->isAlive() || !handler) return false;
-        if (!channels::find_channel(channel)) return false;
+        if (!impl_ || !impl_->isAlive() || !handler) return 0;
+        if (!channels::find_channel(channel)) return 0;
+        SubscriptionId id = 0;
 
         // Reliable subscriber: wrap the handler so every received frame is
         // ACKed (correlated by the command's timestamp) and re-sends are
@@ -813,23 +812,45 @@ namespace raccoon
             };
         }
 
-        bool fresh_channel = false;
         {
             std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
-            const size_t pre = impl_->subscribers.size();
-            auto* sub = impl_->subscriberFor(channel);
-            if (!sub) return false;
-            auto next = std::make_shared<std::vector<Transport::RawHandler>>(*sub->handlers);
-            next->push_back(std::move(handler));
-            sub->handlers = std::move(next);
-            fresh_channel = (impl_->subscribers.size() > pre);
+            auto sub = impl_->addSubscriber(channel, std::move(handler));
+            if (!sub) return 0;
+            id = sub->id;
         }
-        // If a NEW channel was opened, the spin thread's waitv list no
-        // longer reflects reality — wake it so it re-snapshots and
-        // includes the new reader's wake_seq. Adding only a handler to
-        // an existing channel doesn't need a wake.
-        if (fresh_channel) wake_control();
-        return true;
+        // The spin thread's list of rings to wait on changed: wake it so that it
+        // includes the new reader.
+        wake_control();
+        return id;
+    }
+
+    void Transport::unsubscribe(SubscriptionId id)
+    {
+        if (!impl_ || id == 0) return;
+        {
+            std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+            auto& subs = impl_->subscribers;
+            for (auto& s : subs)
+                if (s->id == id) s->active.store(false, std::memory_order_release);
+            subs.erase(std::remove_if(subs.begin(), subs.end(),
+                                      [id](const auto& s) { return s->id == id; }),
+                       subs.end());
+        }
+        // A delivery in progress finishes with the handler it holds; the reader is
+        // closed when the spin thread lets go of the entry.
+        wake_control();
+    }
+
+    void Transport::start_background_spin(int watchdog_ms)
+    {
+        if (!impl_ || !impl_->isAlive()) return;
+        std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
+        if (impl_->spinThread.joinable()) return;
+        Impl* impl = impl_.get();
+        impl->spinThread = std::thread([this, impl, watchdog_ms]
+        {
+            while (impl->isAlive()) spin_once(watchdog_ms);
+        });
     }
 
     void Transport::set_reliable_event_handler(ReliableEventHandler handler)
@@ -856,23 +877,26 @@ namespace raccoon
 
         const auto t0 = std::chrono::steady_clock::now();
         int delivered = 0;
+        // Read before the subscriber list is snapshotted: a subscribe() or stop() after
+        // this point changes the word, and the wait below returns at once.
+        const uint32_t controlExpected = impl_->controlSeq.load(std::memory_order_acquire);
 
         // Snapshot the subscriber list under the mutex, then iterate.
         // Each receive happens under the mutex (rrb_reader_recv is not
         // thread-safe). Handler invocation releases the mutex so a slow
         // handler does not block unrelated transport ops on other threads.
-        std::vector<Impl::SubEntry*> subsSnapshot;
+        std::vector<std::shared_ptr<Impl::SubEntry>> subsSnapshot;
         {
             std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
             subsSnapshot.reserve(impl_->subscribers.size());
-            for (auto& s : impl_->subscribers) subsSnapshot.push_back(s.get());
+            for (auto& s : impl_->subscribers) subsSnapshot.push_back(s);
         }
 
         // Hold a snapshot of each frame + its handler list before
         // releasing the mutex to call handlers. This guarantees handlers
         // see a consistent view even if another thread adds/removes
         // subscribers concurrently.
-        for (auto* sub : subsSnapshot)
+        for (auto& sub : subsSnapshot)
         {
             while (true)
             {
@@ -924,21 +948,18 @@ namespace raccoon
         if (delivered == 0 && timeout_ms > 0)
         {
             int timeout_us = timeout_ms * 1000;
-            uint32_t controlExpected =
-                impl_->controlSeq.load(std::memory_order_acquire);
-
             struct MultiCtx {
                 Transport* t;
-                Impl::SubEntry** entries;
+                std::shared_ptr<Impl::SubEntry>* entries;
                 int* delivered_out;
             };
-            std::vector<Impl::SubEntry*> entries(subsSnapshot);
+            std::vector<std::shared_ptr<Impl::SubEntry>>& entries = subsSnapshot;
             std::vector<rrb_reader_t*> readers;
             readers.reserve(entries.size());
             {
                 std::lock_guard<std::recursive_mutex> lk(impl_->apiMutex);
                 if (!impl_->isAlive()) return delivered;
-                for (auto* e : entries) readers.push_back(e->reader);
+                for (auto& e : entries) readers.push_back(e->reader);
             }
             MultiCtx ctx{this, entries.data(), &delivered};
             auto cb = [](size_t idx, const void* data, size_t len,

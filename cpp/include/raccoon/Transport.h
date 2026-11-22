@@ -129,17 +129,34 @@ namespace raccoon
                                     const PublishOptions& options = {});
 
         using RawHandler = std::function<void(const void* data, int dataLen)>;
+        /** Identifies a subscription for `unsubscribe`. 0 is never a valid id. */
+        using SubscriptionId = uint64_t;
+
         /**
-         * Subscribe to raw payload bytes on a channel of the channel table. Returns false
-         * if the channel is not in the table or the transport is closed. A new subscriber
+         * Subscribe to raw payload bytes on a channel of the channel table. Returns 0 if
+         * the channel is not in the table or the transport is closed. A new subscriber
          * starts after the latest frame; on a retained channel it first receives the latest
          * frame.
          */
-        bool subscribe_raw(std::string_view channel, RawHandler handler);
+        SubscriptionId subscribe_raw(std::string_view channel, RawHandler handler);
 
-        /** Like `subscribe_raw`, and fails if the channel does not carry `type_name`. */
-        bool subscribe_typed(std::string_view channel, const char* type_name,
-                             RawHandler handler);
+        /** Like `subscribe_raw`, and fails (returns 0) if the channel does not carry `type_name`. */
+        SubscriptionId subscribe_typed(std::string_view channel, const char* type_name,
+                                       RawHandler handler);
+
+        /**
+         * End a subscription. A delivery that is already running finishes; no frame is
+         * delivered to the handler after that.
+         */
+        void unsubscribe(SubscriptionId id);
+
+        /**
+         * Run `spin_once` on a thread of the transport until `shutdown()`. The thread
+         * parks in the kernel while nothing happens (no polling); `watchdog_ms` only
+         * bounds a single wait. Calling it again has no effect. Do not call `spin_once`
+         * or `spin` yourself while this thread runs.
+         */
+        void start_background_spin(int watchdog_ms = 1000);
 
         /** Reliable-delivery lifecycle events, for logging/telemetry. */
         enum class ReliableEvent
@@ -201,8 +218,8 @@ namespace raccoon
         }
 
         template <TransportMessage T>
-        bool subscribe(std::string_view channel,
-                       std::function<void(const T &)> handler)
+        SubscriptionId subscribe(std::string_view channel,
+                                 std::function<void(const T &)> handler)
         {
             return subscribe_typed(channel, T::type_name, [handler](const void* data, int len)
             {
