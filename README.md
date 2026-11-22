@@ -186,12 +186,13 @@ Defined in `messages/types/` under the `raccoon` namespace. The wire format is w
 | `vector3f_t` | 3D float vector (gyro, accel, mag) |
 | `quaternion_t` | Orientation quaternion |
 | `orientation_matrix_t` | 3×3 orientation matrix |
-| `string_t` | String message |
+| `string_t` | String message (JSON of the camera and the UI) |
+| `message_t` | A message for the user: a title and a text (`messages/error`, `messages/warn`) |
 | `kinematics_config_t` | Kinematics matrices and motor calibration |
 | `screen_render_t`, `screen_render_answer_t` | Screen request from the robot and the answer from botui |
 | `cam_frame_t`, `cam_detections_t`, `cam_blob_t` | Camera frame and detections (raccoon-cam) |
 | `cam_config_t`, `cam_stream_ctl_t` | Camera config and stream on/off |
-| `yolo_frame_t`, `yolo_box_t` | Frame with YOLO boxes (`raccoon/yolo/frame`) |
+| `yolo_frame_t`, `yolo_box_t` | Frame with YOLO boxes (no channel of the channel table carries them) |
 | `ack_t`, `envelope_t`, `retain_request_t` | Protocol types for reliable delivery and retain |
 
 ### Language-Specific Notes
