@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """deploy.py — install a local raccoon-transport wheel on a Pi (for development).
 
-Copies the wheel from this machine to the Pi and installs it there. Releases are installed by
+Copies the native wheel from this machine to the Pi and installs it there. Releases are installed by
 `raccoon update` (from PyPI), not by this script. Standard library only.
 
 Usage:
@@ -107,9 +107,10 @@ def find_wheel(artifact: str | None) -> tuple[Path, str | None]:
         if not manifest.is_file():
             fail("no builds/manifest.json. Run build.py first, or pass --artifact <wheel>.")
         document = json.loads(manifest.read_text())
-        wheels = [f["name"] for f in document["files"] if f.get("kind") == "wheel"]
+        # The Pi gets the wheel with the compiled transport; the pure wheel has no native module.
+        wheels = [f["name"] for f in document["files"] if f.get("kind") == "native-wheel"]
         if len(wheels) != 1:
-            fail(f"expected one wheel in {manifest}, found {len(wheels)}")
+            fail(f"expected one native wheel in {manifest}, found {len(wheels)}")
         path = manifest.parent / wheels[0]
         contract_hash = document.get("contract_hash")
     if not path.is_file() or not (path.name.startswith("raccoon_transport-") and path.suffix == ".whl"):
