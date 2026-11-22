@@ -152,7 +152,7 @@ jobs:
   build-and-release:
     needs: [build-and-test, version]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || !inputs.release))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
     defaults:
@@ -165,8 +165,8 @@ jobs:
       # The same script that builds locally: contract check, wheel and contract assets, all in
       # Docker, written to builds/. The release carries the contract hash so the image build can
       # learn the expected hash of a transport version without building it.
-      # On this x86 runner the native wheel is cross compiled for the Raspberry Pi (no emulation),
-      # and tried out under qemu-user.
+      # On this ARM runner the native wheel is compiled in the manylinux_2_28 container, so the same
+      # files go to the GitHub release and to PyPI: the pure wheel and the wheel for the Raspberry Pi.
       - name: Build
         run: python3 build.py --version ${{ needs.version.outputs.number }}
 
@@ -186,62 +186,20 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: raccoon-transport-wheel
-          # PyPI only takes the pure wheel; the native wheel is a release asset.
-          path: builds/raccoon_transport-*-any.whl
-
-  # The wheel with the compiled transport for PyPI. PyPI does not take the linux_aarch64 wheel of
-  # build.py, only manylinux, so it is built in the manylinux container (an old glibc, so it runs on
-  # every Raspberry Pi OS). A Raspberry Pi (Python 3.13, aarch64) then gets this wheel from
-  # `pip install raccoon-transport`, every other machine the pure wheel.
-  native-wheel:
-    name: Native wheel (manylinux aarch64)
-    needs: [build-and-test, version]
-    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set the version
-        run: |
-          sed -i -E 's/^version = ".*"/version = "${{ needs.version.outputs.number }}"/' python/pyproject.toml
-          grep -n '^version' python/pyproject.toml
-
-      - name: Build the wheel
-        uses: pypa/cibuildwheel@v3.2.1
-        with:
-          package-dir: python
-          output-dir: wheelhouse
-        env:
-          CIBW_BUILD: cp313-manylinux_aarch64
-          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
-          CIBW_BUILD_VERBOSITY: 1
-          CIBW_TEST_COMMAND: >-
-            python -c "import raccoon_transport as r; assert r.NATIVE; print('native transport ok', r.contract_hash())"
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: raccoon-transport-native-wheel
-          path: wheelhouse/*.whl
+          path: builds/raccoon_transport-*.whl
 
   publish-pypi:
-    needs: [build-and-release, native-wheel]
+    needs: build-and-release
     if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
     runs-on: ubuntu-latest
     permissions:
       id-token: write
 
     steps:
-      - name: Download the pure wheel
+      - name: Download the wheels
         uses: actions/download-artifact@v4
         with:
           name: raccoon-transport-wheel
-          path: dist/
-
-      - name: Download the native wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: raccoon-transport-native-wheel
           path: dist/
 
       - name: Publish to PyPI

@@ -1,11 +1,21 @@
 # Builder for the raccoon-transport wheels and the contract assets. Used by build.py, which picks
 # the stage with `docker build --target`. Like the raccoon-lib builder:
 #
-#   cross   x86_64 image with the aarch64 cross compiler (a PC). Nothing is emulated while compiling:
-#           aarch64-linux-gnu-g++ runs on the host CPU. Only the finished wheel is tried out under
-#           qemu-user (an import and a publish/subscribe round trip). No binfmt, no --privileged.
-#   native  image for the machine it is built on (an arm64 machine, e.g. the CI's ARM runner), with the
-#           normal compiler. Everything runs natively, no qemu.
+#   native  the manylinux_2_28 image of the machine it is built on (an aarch64 machine, e.g. the CI's
+#           ARM runner). The wheel is compiled there and checked with auditwheel, so it carries a
+#           manylinux tag: it is the wheel that goes to GitHub and to PyPI. Everything runs natively.
+#   cross   x86_64 Debian image with the aarch64 cross compiler (a PC). Nothing is emulated while
+#           compiling. The wheel has the tag linux_aarch64 and is only for deploy.py on a Pi; it is
+#           tried out under qemu-user (an import and a publish/subscribe round trip).
+ARG MANYLINUX=quay.io/pypa/manylinux_2_28_x86_64
+
+FROM ${MANYLINUX} AS native
+ENV PATH=/opt/python/cp313-cp313/bin:$PATH \
+    PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+RUN pip install --no-cache-dir build "setuptools>=68.0" wheel "pybind11>=2.11"
+WORKDIR /src
+
+
 FROM debian:13-slim AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -22,12 +32,6 @@ RUN pip install --no-cache-dir build "setuptools>=68.0" wheel "pybind11>=2.11"
 
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /src
-
-
-FROM base AS native
-RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ \
-    && rm -rf /var/lib/apt/lists/*
-CMD ["/bin/bash"]
 
 
 FROM base AS cross

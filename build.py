@@ -10,8 +10,9 @@ Two modes, picked by the CPU of the machine it runs on (or --mode):
   cross   (x86_64 PC)   the native module is cross compiled with the aarch64 compiler at native
                         speed, nothing is emulated. Only the finished wheel is tried out under
                         qemu-user (no binfmt, no --privileged).
-  native  (aarch64)     compiled with the normal compiler of an arm64 image, everything runs
-                        natively. This is what the CI does on an ARM runner.
+  native  (aarch64)     compiled in the manylinux_2_28 container of the machine, everything runs
+                        natively. The wheel has a manylinux tag: it is the one that goes to GitHub
+                        and PyPI. The CI does this on an ARM runner.
 
 Usage:
     python3 build.py                  # local build, version 0.0
@@ -21,8 +22,9 @@ Usage:
 Result:
     builds/raccoon_transport-<version>-py3-none-any.whl                the pure wheel: channel names,
                                                                        message classes, contract check
-    builds/raccoon_transport-<version>-cp313-cp313-linux_aarch64.whl   the native wheel for the Pi
-                                                                       (compiled from ./cpp and ./messages)
+    builds/raccoon_transport-<version>-cp313-cp313-manylinux_2_28_aarch64.whl   the native wheel for the Pi
+                                                    (compiled from ./cpp and ./messages); cross mode
+                                                    makes ...-linux_aarch64.whl, for deploy.py only
     builds/contract-hash.txt          the contract hash (raccoon-image reads it from the release)
     builds/contract.json              the contract in readable form
     builds/manifest.json
@@ -99,6 +101,15 @@ def build_native_wheel(work: Path, out: Path, mode: str) -> None:
     wheels = sorted(native_out.glob("*.whl"))
     if len(wheels) != 1:
         fail(f"expected one native wheel, found {len(wheels)}")
+    if mode == "native":
+        # Checks that the wheel only needs what every manylinux_2_28 system has, and gives it the tag.
+        repaired = Path("/tmp/native-repaired")
+        repaired.mkdir()
+        arch = platform.machine()
+        run(["auditwheel", "repair", "--plat", f"manylinux_2_28_{arch}", "-w", str(repaired), str(wheels[0])])
+        wheels = sorted(repaired.glob("*.whl"))
+        if len(wheels) != 1:
+            fail(f"expected one repaired wheel, found {len(wheels)}")
     smoke_test(wheels[0], mode)
     shutil.copy(wheels[0], out / wheels[0].name)
 
@@ -197,9 +208,10 @@ def main() -> None:
     image = args.image
     if not image:
         image = f"{IMAGE}-{mode}"
+        arch = "aarch64" if platform.machine() in ("aarch64", "arm64") else "x86_64"
         print(f"▶ Building Docker image {image} ({mode})")
-        subprocess.run(["docker", "build", "--target", mode, "-t", image, "-f", str(ROOT / "Dockerfile"), str(ROOT)],
-                       check=True)
+        subprocess.run(["docker", "build", "--target", mode, "--build-arg", f"MANYLINUX=quay.io/pypa/manylinux_2_28_{arch}",
+                        "-t", image, "-f", str(ROOT / "Dockerfile"), str(ROOT)], check=True)
 
     BUILDS.mkdir(exist_ok=True)
     for stale in [*BUILDS.glob("raccoon_transport-*.whl"), BUILDS / "contract-hash.txt",
