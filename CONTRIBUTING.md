@@ -24,7 +24,7 @@ There is no code generation step; the message classes are written by hand.
 ### Python
 
 ```bash
-pip install -e python/
+pip install ./python
 ```
 
 ---

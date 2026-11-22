@@ -79,8 +79,8 @@ dart analyze
 
 ### Python:
 ```bash
-cd python
-pip install -e .
+pip install ./python   # compiles the native module
+python3 -m pytest python/tests
 ```
 
 ### Integration Tests:
@@ -111,8 +111,9 @@ CI runs them without gating the release.
 - `lib/src/lcm/`, `lib/src/transport.dart` and `lib/src/reliable.dart` are a separate UDP-multicast client that does not use shared memory.
 
 ### Python Package (`python/`)
-- Message classes in `raccoon_transport/types/raccoon/` and the channel names in `channels.py`.
-- `raccoon_transport.Transport` is an in-process queue. It does not use shared memory and does not reach other processes. To talk to the robot from Python, use `raccoon.foundation.get_transport()` of raccoon-lib, which binds the C++ transport.
+- Message classes in `raccoon_transport/types/raccoon/`, the channel names in `channel_table.py` (generated) and the contract check.
+- `raccoon_transport.Transport` (`python/src/native.cpp`, module `_native`) wraps `raccoon::Transport`: all behaviour is in the C++ core, the binding converts Python objects to bytes and calls the core. `get_transport()` returns the transport of the process; it starts a spin thread of the core on the first subscribe. Python handlers run on that thread with the GIL, and a callback object is released under the GIL, because the transport can be destroyed on a thread without it.
+- `RACCOON_TRANSPORT_PURE=1` builds the package without the native module (laptop). `RACCOON_TRANSPORT_NO_EXIT_HOOK=1` (set by `python/tests/conftest.py`) keeps the exit hook from replacing the exit status with `os._exit`.
 
 ### C++ Interop Tools (`cpp/tools/`)
 - `interop_publish` / `interop_subscribe` — CLI tools with a JSON event protocol, used by the integration tests.
@@ -139,5 +140,5 @@ dependencies:
 
 ### Python:
 ```bash
-pip install -e ../raccoon-transport/python
+pip install ../raccoon-transport/python
 ```

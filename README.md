@@ -77,26 +77,28 @@ dependencies:
 
 ## Quick Start (Python)
 
-The Python package carries the message classes and the channel names. A message is encoded to the bytes that go on the wire and decoded from them:
+`raccoon_transport.Transport` is a thin wrapper around the C++ transport: the rings, reliable delivery, retained channels and statistics are the C++ implementation. A channel is named by its path in the channel table, and the message type of a channel is checked on publish and subscribe:
 
 ```python
-from raccoon_transport import Channels
+import raccoon_transport as rt
+from raccoon_transport import channels
 from raccoon_transport.types.raccoon import scalar_i32_t
 
-cmd = scalar_i32_t(timestamp=0, value=50)
-payload = cmd.encode()                      # bytes for Channels.motor_power_command(0)
+transport = rt.get_transport()              # one per process, shared
 
-msg = scalar_i32_t.decode(payload)
-print(msg.value)                            # 50
+# publish a typed message; a timestamp of 0 is stamped
+transport.publish(channels.hardware.motor.cmd.power(0), scalar_i32_t(timestamp=0, value=50))
+
+# subscribe: the handler gets (channel, message) on the transport's thread
+sub = transport.subscribe(channels.hardware.motor.state.position(0),
+                          lambda channel, msg: print(msg.value),
+                          message_type=scalar_i32_t)
+transport.unsubscribe(sub)
 ```
 
-`raccoon_transport.Transport` is an in-process message queue (for tests). It does not use shared memory and does not reach other processes. A Python program that talks to the robot uses the C++ transport through raccoon-lib:
+Without `message_type` the handler receives the payload bytes. `publish_raw(channel, payload)` sends bytes. A publish that is refused raises `PublishError`; its `result` is a `PublishResult` (`NotInTable`, `TypeMismatch`, `TooBig` or `Closed`). Whether a channel is reliable or retained is a property of the channel table.
 
-```python
-from raccoon.foundation import get_transport
-
-transport = get_transport()
-```
+A pure install (without the native module, for a laptop) has the message classes, the channel names and the contract check; `Transport` raises when it is created.
 
 ---
 
@@ -109,7 +111,7 @@ python3 build.py                 # result in builds/, version 0.0
 python3 deploy.py --host <pi>    # install it on a Pi for development
 ```
 
-Needs only Docker and Python 3. Writes the wheel, `contract-hash.txt` and `contract.json` to `builds/`.
+Needs only Docker and Python 3. Writes the pure wheel (`py3-none-any`: message classes, channel names, contract check), `contract-hash.txt` and `contract.json` to `builds/`. `python3 build.py --native` also builds the native wheel for the Raspberry Pi (`linux_aarch64`); on an x86 machine it runs under qemu.
 
 ### C++
 
@@ -126,10 +128,11 @@ cd dart
 dart pub get
 ```
 
-### Python (editable install)
+### Python (with the native module)
 
 ```bash
-pip install -e python/
+pip install ./python          # compiles the C++ transport
+RACCOON_TRANSPORT_PURE=1 pip install ./python   # pure Python only
 ```
 
 ### Contract hash
@@ -194,7 +197,7 @@ Defined in `messages/types/` under the `raccoon` namespace. The wire format is w
 
 - **C++**: Message structs live in `messages/`, the transport library in `cpp/`. Transport uses the PIMPL pattern.
 - **Dart**: Message classes in `dart/lib/messages/` (written by hand, no code generation). `RaccoonRingTransport` reaches the rings through `libraccoon_ring_bridge.so`, built with `cpp/bridge/build.sh`. The package also contains a separate UDP-multicast client (`lib/src/lcm/`, `lib/src/transport.dart`) that does not use shared memory.
-- **Python**: Message classes in `python/raccoon_transport/types/raccoon/`, channel names in `python/raccoon_transport/channels.py`. `raccoon_transport.Transport` is an in-process queue.
+- **Python**: Message classes in `python/raccoon_transport/types/raccoon/`, channel names in `python/raccoon_transport/channel_table.py` (generated), and `raccoon_transport.Transport`, a pybind11 wrapper (`python/src/native.cpp`) around the C++ transport.
 
 ---
 

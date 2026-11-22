@@ -6,11 +6,15 @@ copied into the container, built there, and only the results plus builds/manifes
 out. CI runs exactly this script.
 
 Usage:
-    python3 build.py                  # local build, version 0.0
+    python3 build.py                  # pure wheel and contract assets, version 0.0
     python3 build.py --version 71     # release build (CI)
+    python3 build.py --native         # also the native wheel for the Raspberry Pi (aarch64)
 
 Result:
-    builds/raccoon_transport-<version>-py3-none-any.whl
+    builds/raccoon_transport-<version>-py3-none-any.whl                the pure wheel: channel names,
+                                                                       message classes, contract check
+    builds/raccoon_transport-<version>-cp313-cp313-linux_aarch64.whl   with --native: adds the native
+                                                                       transport (compiled from ./cpp)
     builds/contract-hash.txt          the contract hash (raccoon-image reads it from the release)
     builds/contract.json              the contract in readable form
     builds/manifest.json
@@ -62,7 +66,7 @@ def sha256(path: Path) -> str:
 # ── inside the container ─────────────────────────────────────────────────
 
 
-def run_in_container(version: str) -> None:
+def run_in_container(version: str, native: bool) -> None:
     """The actual build. /src is the repository (read-only), /out is ./builds."""
     src, work, out = Path("/src"), Path("/tmp/work"), Path("/out")
     shutil.copytree(src, work, ignore=lambda directory, names: (
@@ -81,7 +85,17 @@ def run_in_container(version: str) -> None:
         fail("could not find the version in python/pyproject.toml")
     pyproject.write_text(text)
 
-    run(["python3", "-m", "build", "--wheel", "--no-isolation", "--outdir", str(out), "python"])
+    # The pure wheel has no compiled part; it is what a laptop installs.
+    run(["python3", "-m", "build", "--wheel", "--no-isolation", "--outdir", str(out), "python"],
+        env={**os.environ, "RACCOON_TRANSPORT_PURE": "1"})
+    if native:
+        # Compiled for the machine the container runs on: run it on linux/arm64 (the Pi, an
+        # arm64 CI runner, or qemu) to get the wheel the Pi installs.
+        native_out = Path("/tmp/native-out")
+        native_out.mkdir()
+        run(["python3", "-m", "build", "--wheel", "--no-isolation", "--outdir", str(native_out), "python"])
+        for wheel in native_out.glob("*.whl"):
+            shutil.copy(wheel, out / wheel.name)
 
     # The release carries the contract hash so the image build can learn the expected hash of a
     # transport version without building it.
@@ -98,6 +112,8 @@ def run_in_container(version: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the raccoon-transport wheel in Docker.")
     parser.add_argument("--version", default="0.0", help="version stamped into the wheel (default: 0.0 = local build)")
+    parser.add_argument("--native", action="store_true",
+                        help="also build the native wheel, for linux/arm64 (the Raspberry Pi)")
     parser.add_argument("--image", help="use this Docker image instead of building ./Dockerfile")
     parser.add_argument("--in-container", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -106,17 +122,18 @@ def main() -> None:
         fail(f"--version must be numbers separated by dots (got {args.version!r})")
 
     if args.in_container:
-        run_in_container(args.version)
+        run_in_container(args.version, args.native)
         return
 
     if not shutil.which("docker"):
         fail("docker not found. The build runs in a container so the host stays clean.")
 
+    platform = ["--platform", "linux/arm64"] if args.native else []
     image = args.image
     if not image:
-        image = IMAGE
+        image = IMAGE + ("-arm64" if args.native else "")
         print(f"▶ Building Docker image {image}")
-        subprocess.run(["docker", "build", "-t", image, "-f", str(ROOT / "Dockerfile"), str(ROOT)], check=True)
+        subprocess.run(["docker", "build", *platform, "-t", image, "-f", str(ROOT / "Dockerfile"), str(ROOT)], check=True)
 
     BUILDS.mkdir(exist_ok=True)
     for stale in [*BUILDS.glob("raccoon_transport-*.whl"), BUILDS / "contract-hash.txt",
@@ -125,20 +142,22 @@ def main() -> None:
 
     print(f"▶ Building raccoon-transport {args.version}")
     run([
-        "docker", "run", "--rm",
+        "docker", "run", "--rm", *platform,
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-e", "HOME=/tmp",
         "-v", f"{ROOT}:/src:ro",
         "-v", f"{BUILDS}:/out",
         image,
         "python3", "/src/build.py", "--in-container", "--version", args.version,
+        *(["--native"] if args.native else []),
     ])
 
     wheels = sorted(BUILDS.glob("raccoon_transport-*.whl"))
-    if len(wheels) != 1:
-        fail(f"expected exactly one wheel in {BUILDS}, found {len(wheels)}")
+    expected = 2 if args.native else 1
+    if len(wheels) != expected:
+        fail(f"expected {expected} wheel(s) in {BUILDS}, found {len(wheels)}")
     files = [
-        {"name": wheels[0].name, "kind": "wheel"},
+        *({"name": w.name, "kind": "wheel" if w.name.endswith("-any.whl") else "native-wheel"} for w in wheels),
         {"name": "contract-hash.txt", "kind": "contract-hash"},
         {"name": "contract.json", "kind": "contract"},
     ]
@@ -151,7 +170,8 @@ def main() -> None:
         "files": files,
     }
     (BUILDS / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"✓ {wheels[0].relative_to(ROOT)}  (contract {manifest['contract_hash']})")
+    for wheel in wheels:
+        print(f"✓ {wheel.relative_to(ROOT)}  (contract {manifest['contract_hash']})")
 
 
 if __name__ == "__main__":

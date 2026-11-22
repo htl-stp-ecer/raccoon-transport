@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=68.0", "wheel", "pybind11>=2.11"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "raccoon-transport"
 version = "0.0"
-description = "Shared transport library with channel definitions and optional reliable delivery"
+description = "Shared-memory transport of the Raccoon platform: channel table, message types and the native transport"
 license = { text = "MIT" }
 authors = [{ name = "Tobias Madlberger" }]
 keywords = ["botball", "robotics", "transport", "raspberry-pi"]

@@ -120,14 +120,15 @@ jobs:
         run: dart test test/transport_unit_test.dart test/contract_check_test.dart test/channel_table_test.dart
 
       # ── Python ───────────────────────────────────────────
+      # Installed (not editable) so that the native module is part of it.
       - name: Install Python package
-        run: pip3 install -e python/ pytest
+        run: pip3 install ./python pytest
 
       - name: Verify Python imports
-        run: python3 -c "from raccoon_transport import Transport, Channels; print('OK')"
+        run: python3 -c "import raccoon_transport as r; assert r.NATIVE; print('OK', r.contract_hash())"
 
       - name: Python unit tests
-        run: PYTHONPATH=python python3 -m pytest python/tests -q
+        run: python3 -m pytest python/tests -q
         timeout-minutes: 5
 
       # ── Integration tests ────────────────────────────────
@@ -164,8 +165,14 @@ jobs:
       # The same script that builds locally: contract check, wheel and contract assets, all in
       # Docker, written to builds/. The release carries the contract hash so the image build can
       # learn the expected hash of a transport version without building it.
+      # The native wheel is built for linux/arm64 (the Raspberry Pi) under qemu.
+      - name: Set up qemu
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Build
-        run: python3 build.py --version ${{ needs.version.outputs.number }}
+        run: python3 build.py --native --version ${{ needs.version.outputs.number }}
 
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
@@ -183,7 +190,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: raccoon-transport-wheel
-          path: builds/raccoon_transport-*.whl
+          # PyPI only takes the pure wheel; the native wheel is a release asset.
+          path: builds/raccoon_transport-*-any.whl
 
   publish-pypi:
     needs: build-and-release
