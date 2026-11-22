@@ -165,14 +165,10 @@ jobs:
       # The same script that builds locally: contract check, wheel and contract assets, all in
       # Docker, written to builds/. The release carries the contract hash so the image build can
       # learn the expected hash of a transport version without building it.
-      # The native wheel is built for linux/arm64 (the Raspberry Pi) under qemu.
-      - name: Set up qemu
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
+      # On this x86 runner the native wheel is cross compiled for the Raspberry Pi (no emulation),
+      # and tried out under qemu-user.
       - name: Build
-        run: python3 build.py --native --version ${{ needs.version.outputs.number }}
+        run: python3 build.py --version ${{ needs.version.outputs.number }}
 
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)

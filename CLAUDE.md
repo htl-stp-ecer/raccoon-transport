@@ -56,7 +56,8 @@ and Dart (`dart/lib/src/contract.dart`). Every binary also carries the string
 
 ### Wheel and contract assets (Docker)
 ```bash
-python3 build.py                  # contract check + wheel + contract assets -> builds/, version 0.0
+python3 build.py                  # contract check + pure wheel + native wheel (aarch64) + contract assets -> builds/, version 0.0
+python3 build.py --mode native    # compile on an aarch64 machine instead of cross compiling (auto picks by CPU)
 python3 build.py --version 71     # release build (what CI does)
 python3 deploy.py --host <pi>     # install builds/ wheel on the Pi, sets raccoon-transport to "dev" in its bundle file
 ```

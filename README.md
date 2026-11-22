@@ -111,7 +111,7 @@ python3 build.py                 # result in builds/, version 0.0
 python3 deploy.py --host <pi>    # install it on a Pi for development
 ```
 
-Needs only Docker and Python 3. Writes the pure wheel (`py3-none-any`: message classes, channel names, contract check), `contract-hash.txt` and `contract.json` to `builds/`. `python3 build.py --native` also builds the native wheel for the Raspberry Pi (`linux_aarch64`); on an x86 machine it runs under qemu.
+Needs only Docker and Python 3. Writes the pure wheel (`py3-none-any`: message classes, channel names, contract check), the native wheel, `contract-hash.txt` and `contract.json` to `builds/`. It also builds the native wheel for the Raspberry Pi (`linux_aarch64`): on an x86 machine it is cross compiled with the aarch64 compiler (nothing is emulated) and then tried out under qemu-user, on an aarch64 machine it is compiled natively (`--mode cross` or `--mode native` forces a mode).
 
 ### C++
 
