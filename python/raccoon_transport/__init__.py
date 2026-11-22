@@ -24,6 +24,11 @@ except ImportError:  # pure wheel
     class PublishError(RuntimeError):  # type: ignore[no-redef]
         pass
 
+    class Subscription:  # type: ignore[no-redef]
+        pass
+
+    PublishResult = None  # type: ignore[assignment,misc]
+
     class Transport:  # type: ignore[no-redef]
         """Placeholder: this install has no native transport."""
 
