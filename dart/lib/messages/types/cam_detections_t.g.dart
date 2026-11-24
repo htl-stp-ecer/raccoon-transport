@@ -9,6 +9,7 @@ import 'cam_blob_t.g.dart';
 class CamDetectionsT implements LcmMessage {
 
   int timestamp;
+  int frame_id;
   int frame_width;
   int frame_height;
   int num_detections;
@@ -16,6 +17,7 @@ class CamDetectionsT implements LcmMessage {
 
   CamDetectionsT({
     required this.timestamp,
+    required this.frame_id,
     required this.frame_width,
     required this.frame_height,
     required this.num_detections,
@@ -33,6 +35,7 @@ class CamDetectionsT implements LcmMessage {
   @override
   void encodeBody(LcmBuffer buf) {
     buf.putInt64(timestamp);
+    buf.putInt64(frame_id);
     buf.putInt32(frame_width);
     buf.putInt32(frame_height);
     buf.putInt32(num_detections);
@@ -47,6 +50,7 @@ class CamDetectionsT implements LcmMessage {
 
   static CamDetectionsT decodeBody(LcmBuffer buf) {
     final timestamp = buf.getInt64();
+    final frame_id = buf.getInt64();
     final frame_width = buf.getInt32();
     final frame_height = buf.getInt32();
     final num_detections = buf.getInt32();
@@ -58,6 +62,7 @@ class CamDetectionsT implements LcmMessage {
 
     return CamDetectionsT(
       timestamp: timestamp,
+      frame_id: frame_id,
       frame_width: frame_width,
       frame_height: frame_height,
       num_detections: num_detections,

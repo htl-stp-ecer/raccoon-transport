@@ -12,6 +12,7 @@ namespace raccoon
         static constexpr const char* type_name = "cam_detections_t";
 
         int64_t timestamp = 0;
+        int64_t frame_id = 0;
         int32_t frame_width = 0;
         int32_t frame_height = 0;
         int32_t num_detections = 0;

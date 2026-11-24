@@ -9,6 +9,7 @@ from .cam_blob_t import cam_blob_t
 @dataclass
 class cam_detections_t:
     timestamp: int = 0
+    frame_id: int = 0
     frame_width: int = 0
     frame_height: int = 0
     num_detections: int = 0
@@ -18,6 +19,7 @@ class cam_detections_t:
         return b"".join(
             [
                 pack_i64(self.timestamp),
+                pack_i64(self.frame_id),
                 pack_i32(self.frame_width),
                 pack_i32(self.frame_height),
                 pack_i32(len(self.detections)),
@@ -28,6 +30,7 @@ class cam_detections_t:
     @classmethod
     def decode(cls, data: bytes) -> "cam_detections_t":
         timestamp, offset = read_i64(data, 0)
+        frame_id, offset = read_i64(data, offset)
         frame_width, offset = read_i32(data, offset)
         frame_height, offset = read_i32(data, offset)
         num_detections, offset = read_i32(data, offset)
@@ -37,6 +40,7 @@ class cam_detections_t:
             detections.append(detection)
         return cls(
             timestamp=timestamp,
+            frame_id=frame_id,
             frame_width=frame_width,
             frame_height=frame_height,
             num_detections=num_detections,

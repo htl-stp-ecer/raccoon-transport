@@ -31,5 +31,3 @@ export 'messages/types/vector3f_t.g.dart';
 export 'messages/types/cam_blob_t.g.dart';
 export 'messages/types/cam_detections_t.g.dart';
 export 'messages/types/cam_frame_t.g.dart';
-export 'messages/types/cam_stream_ctl_t.g.dart';
-export 'messages/types/cam_config_t.g.dart';

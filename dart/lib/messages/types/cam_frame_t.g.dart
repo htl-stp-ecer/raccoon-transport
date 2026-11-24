@@ -4,26 +4,23 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:raccoon_transport/raccoon_transport.dart';
-import 'cam_blob_t.g.dart';
 
 class CamFrameT implements LcmMessage {
 
   int timestamp;
+  int frame_id;
   int frame_width;
   int frame_height;
   int frame_size;
   List<int> frame_data;
-  int num_detections;
-  List<CamBlobT> detections;
 
   CamFrameT({
     required this.timestamp,
+    required this.frame_id,
     required this.frame_width,
     required this.frame_height,
     required this.frame_size,
     required this.frame_data,
-    required this.num_detections,
-    required this.detections,
   });
 
   @override
@@ -37,15 +34,12 @@ class CamFrameT implements LcmMessage {
   @override
   void encodeBody(LcmBuffer buf) {
     buf.putInt64(timestamp);
+    buf.putInt64(frame_id);
     buf.putInt32(frame_width);
     buf.putInt32(frame_height);
     buf.putInt32(frame_size);
     for (var i0 = 0; i0 < frame_size; i0++) {
       buf.putUint8(frame_data[i0]);
-    }
-    buf.putInt32(num_detections);
-    for (var i0 = 0; i0 < num_detections; i0++) {
-      detections[i0].encodeBody(buf);
     }
   }
 
@@ -55,6 +49,7 @@ class CamFrameT implements LcmMessage {
 
   static CamFrameT decodeBody(LcmBuffer buf) {
     final timestamp = buf.getInt64();
+    final frame_id = buf.getInt64();
     final frame_width = buf.getInt32();
     final frame_height = buf.getInt32();
     final frame_size = buf.getInt32();
@@ -63,21 +58,14 @@ class CamFrameT implements LcmMessage {
       final frame_dataElement = buf.getUint8();
       frame_data.add(frame_dataElement);
     }
-    final num_detections = buf.getInt32();
-    final detections = <CamBlobT>[];
-    for (var i0 = 0; i0 < num_detections; i0++) {
-      final detectionsElement = CamBlobT.decodeBody(buf);
-      detections.add(detectionsElement);
-    }
 
     return CamFrameT(
       timestamp: timestamp,
+      frame_id: frame_id,
       frame_width: frame_width,
       frame_height: frame_height,
       frame_size: frame_size,
       frame_data: frame_data,
-      num_detections: num_detections,
-      detections: detections,
     );
   }
 }

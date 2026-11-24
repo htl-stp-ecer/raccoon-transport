@@ -6,7 +6,7 @@ namespace raccoon
 {
     int cam_detections_t::encoded_size() const noexcept
     {
-        int size = 8 + 4 + 4 + 4;
+        int size = 8 + 8 + 4 + 4 + 4;
         for (const auto& detection : detections)
         {
             size += detection.encoded_size();
@@ -18,6 +18,7 @@ namespace raccoon
     {
         codec::Writer writer(buf, buf_len);
         if (!writer.put_be64(timestamp)
+            || !writer.put_be64(frame_id)
             || !writer.put_be32(frame_width)
             || !writer.put_be32(frame_height)
             || !writer.put_be32(static_cast<int32_t>(detections.size())))
@@ -38,6 +39,7 @@ namespace raccoon
     {
         codec::Reader reader(buf, buf_len);
         if (!reader.get_be64(timestamp)
+            || !reader.get_be64(frame_id)
             || !reader.get_be32(frame_width)
             || !reader.get_be32(frame_height)
             || !reader.get_be32(num_detections)

@@ -102,8 +102,8 @@ channels:
   - {name: ui/screen/answer, type: screen_render_answer_t, slots: 32, max_payload: 1MiB, reliable: true, doc: "Answer of the user to a screen, from botui to the program."}
 
   # ---- camera -------------------------------------------------------------------------------
-  - {name: camera/state/frame,      type: cam_frame_t,      slots: 4, max_payload: 64MiB, doc: "Latest camera frame (JPEG) with its detections."}
-  - {name: camera/state/detections, type: cam_detections_t, slots: 8, max_payload: 4MiB,  doc: "Detections of the latest frame."}
+  - {name: camera/state/frame,      type: cam_frame_t,      slots: 4, max_payload: 64MiB, doc: "Latest camera frame (JPEG). `frame_id` is the number of the frame; the detections of that frame carry the same `frame_id`."}
+  - {name: camera/state/detections, type: cam_detections_t, slots: 8, max_payload: 4MiB,  doc: "Detections of one frame; `frame_id` is the `frame_id` of that frame on camera/state/frame."}
   - {name: camera/cmd/request,      type: string_t, slots: 64, max_payload: 1MiB, reliable: true, doc: "Command to the camera service (JSON)."}
   - {name: camera/response,         type: string_t, slots: 64, max_payload: 1MiB, reliable: true, doc: "Answer of the camera service to a request (JSON). An event, not retained."}
   - {name: camera/state/status,     type: string_t, slots: 32, max_payload: 1MiB, doc: "Status of the camera service (JSON)."}

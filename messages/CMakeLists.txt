@@ -6,10 +6,8 @@ add_library(raccoon_messages STATIC
     protocol/envelope_t.cpp
     protocol/retain_request_t.cpp
     types/cam_blob_t.cpp
-    types/cam_config_t.cpp
     types/cam_detections_t.cpp
     types/cam_frame_t.cpp
-    types/cam_stream_ctl_t.cpp
     types/kinematics_config_t.cpp
     types/orientation_matrix_t.cpp
     types/quaternion_t.cpp

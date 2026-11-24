@@ -1,5 +1,5 @@
 {
-  "hash": "51cd6d3453038d46",
+  "hash": "58d5e7b87fad521d",
   "format": 1,
   "ring": {
     "magic": 1380143682,
@@ -1488,19 +1488,13 @@
         "i32"
       ]
     ],
-    "cam_config_t": [
+    "cam_detections_t": [
       [
         "timestamp",
         "i64"
       ],
       [
-        "config",
-        "string"
-      ]
-    ],
-    "cam_detections_t": [
-      [
-        "timestamp",
+        "frame_id",
         "i64"
       ],
       [
@@ -1526,6 +1520,10 @@
         "i64"
       ],
       [
+        "frame_id",
+        "i64"
+      ],
+      [
         "frame_width",
         "i32"
       ],
@@ -1540,24 +1538,6 @@
       [
         "frame_data",
         "bytes"
-      ],
-      [
-        "num_detections",
-        "i32"
-      ],
-      [
-        "detections",
-        "list<struct:cam_blob_t>"
-      ]
-    ],
-    "cam_stream_ctl_t": [
-      [
-        "timestamp",
-        "i64"
-      ],
-      [
-        "enabled",
-        "i8"
       ]
     ],
     "envelope_t": [
