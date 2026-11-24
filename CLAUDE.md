@@ -119,8 +119,7 @@ CI runs them without gating the release.
 - `interop_publish` / `interop_subscribe` — CLI tools with a JSON event protocol, used by the integration tests.
 
 ### Channel Naming
-Channels follow the pattern `raccoon/<device>/<property>`.
-Protocol channels use the `__raccoon/` prefix.
+Channel names are paths from `channels.yml`, by convention `<area>/<device>/<id>/{cmd|state}/<name>` (for example `hardware/motor/0/cmd/power`). Acknowledgements of reliable delivery use `protocol/ack`.
 
 ## Consumer Integration
 

@@ -167,14 +167,14 @@ PYTHONPATH=. pytest integration_tests/test_stress.py -v
 ### Transport Layer
 
 - **Plain publish/subscribe** — one file per channel, `/dev/shm/raccoon-rings/<channel with . for />` (`raccoon_ring`, a ring buffer with any number of writers and readers), no daemon. The geometry of a ring (slot count, slot size) comes from the channel table, and the first process that opens a channel creates the ring. A reader parks on a futex and is woken when a frame is published. A new reader starts after the latest frame; on a retained channel it receives the latest frame once. The ring file never shrinks, and a reader checks that the ring fits its file before it uses it.
-- **Reliable delivery** (C++) — at-least-once for commands: the publisher re-sends until the subscriber acknowledges on `__raccoon/ack`, the subscriber delivers each command once. A command that is never acknowledged is reported through `set_reliable_event_handler` and counted in `TransportStats::reliable_dropped`.
+- **Reliable delivery** (C++) — at-least-once for commands: the publisher re-sends until the subscriber acknowledges on `protocol/ack`, the subscriber delivers each command once. A command that is never acknowledged is reported through `set_reliable_event_handler` and counted in `TransportStats::reliable_dropped`.
 - **Retain** (C++) — latest-value-on-subscribe, so a new subscriber immediately gets the most recent frame of the ring.
 - **Lifecycle** — `shutdown()` waits for threads inside `spin_once()` before it closes the readers, and the destructor releases everything even after `stop()`. A handler that throws is counted (`TransportStats::handler_errors`), reported through `set_handler_error_handler` and does not stop the other handlers.
 - **Frame size** — the receive buffer grows to the ring's payload size, so a subscriber never gets a cut-off frame.
 
 ### Channel Naming
 
-Channel names are paths such as `hardware/motor/0/cmd/power`, written in `channels.yml`. By convention a name is `<area>/<device>/<id>/{cmd|state}/<name>`; nothing checks the convention. Protocol channels use the `__raccoon/` prefix.
+Channel names are paths such as `hardware/motor/0/cmd/power`, written in `channels.yml`. By convention a name is `<area>/<device>/<id>/{cmd|state}/<name>`; nothing checks the convention. The acknowledgements of reliable delivery travel on the channel `protocol/ack`.
 
 ### Message Types
 
