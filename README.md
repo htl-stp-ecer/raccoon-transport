@@ -174,7 +174,7 @@ PYTHONPATH=. pytest integration_tests/test_stress.py -v
 
 ### Channel Naming
 
-All channels follow the pattern `raccoon/<device>/<property>`. Protocol channels use the `__raccoon/` prefix.
+Channel names are paths such as `hardware/motor/0/cmd/power`, written in `channels.yml`. By convention a name is `<area>/<device>/<id>/{cmd|state}/<name>`; nothing checks the convention. Protocol channels use the `__raccoon/` prefix.
 
 ### Message Types
 
@@ -190,7 +190,7 @@ Defined in `messages/types/` under the `raccoon` namespace. The wire format is w
 | `message_t` | A message for the user: a title and a text (`messages/error`, `messages/warn`) |
 | `kinematics_config_t` | Kinematics matrices and motor calibration |
 | `screen_render_t`, `screen_render_answer_t` | Screen request from the robot and the answer from botui |
-| `cam_frame_t`, `cam_detections_t`, `cam_blob_t` | Camera frame and detections (raccoon-cam) |
+| `cam_frame_t`, `cam_detections_t`, `cam_blob_t` | Camera frame and detections (raccoon-cam); a blob has a colour (ARGB, 0 = the UI's default) |
 | `cam_config_t`, `cam_stream_ctl_t` | Camera config and stream on/off |
 | `yolo_frame_t`, `yolo_box_t` | Frame with YOLO boxes (no channel of the channel table carries them) |
 | `ack_t`, `envelope_t`, `retain_request_t` | Protocol types for reliable delivery and retain |
