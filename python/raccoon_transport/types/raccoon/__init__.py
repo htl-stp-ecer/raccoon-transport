@@ -15,5 +15,3 @@ from .screen_render_t import screen_render_t
 from .message_t import message_t
 from .string_t import string_t
 from .vector3f_t import vector3f_t
-from .yolo_box_t import yolo_box_t
-from .yolo_frame_t import yolo_frame_t

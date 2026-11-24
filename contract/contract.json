@@ -1,5 +1,5 @@
 {
-  "hash": "58d5e7b87fad521d",
+  "hash": "1d984cf2672663a9",
   "format": 1,
   "ring": {
     "magic": 1380143682,
@@ -1736,66 +1736,6 @@
       [
         "z",
         "f32"
-      ]
-    ],
-    "yolo_box_t": [
-      [
-        "timestamp",
-        "i64"
-      ],
-      [
-        "x",
-        "f32"
-      ],
-      [
-        "y",
-        "f32"
-      ],
-      [
-        "width",
-        "f32"
-      ],
-      [
-        "height",
-        "f32"
-      ],
-      [
-        "label",
-        "string"
-      ],
-      [
-        "confidence",
-        "f32"
-      ]
-    ],
-    "yolo_frame_t": [
-      [
-        "timestamp",
-        "i64"
-      ],
-      [
-        "frame_width",
-        "i32"
-      ],
-      [
-        "frame_height",
-        "i32"
-      ],
-      [
-        "frame_size",
-        "i32"
-      ],
-      [
-        "frame_data",
-        "bytes"
-      ],
-      [
-        "num_boxes",
-        "i32"
-      ],
-      [
-        "boxes",
-        "list<struct:yolo_box_t>"
       ]
     ]
   }

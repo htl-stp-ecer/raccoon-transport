@@ -192,7 +192,6 @@ Defined in `messages/types/` under the `raccoon` namespace. The wire format is w
 | `screen_render_t`, `screen_render_answer_t` | Screen request from the robot and the answer from botui |
 | `cam_frame_t` | One camera frame (JPEG) with a `frame_id` |
 | `cam_detections_t`, `cam_blob_t` | The detections of one frame, with the `frame_id` of that frame; a blob is one detection and has a colour (ARGB, 0 = the UI's default) |
-| `yolo_frame_t`, `yolo_box_t` | Frame with YOLO boxes (no channel of the channel table carries them) |
 | `ack_t`, `envelope_t`, `retain_request_t` | Protocol types for reliable delivery and retain |
 
 ### Language-Specific Notes
